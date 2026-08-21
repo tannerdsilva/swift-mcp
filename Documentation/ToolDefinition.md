@@ -1,0 +1,172 @@
+# Tool Definition Guide
+
+This guide explains how to define MCP tools using swift-mcp's property wrapper system.
+
+## Overview
+
+Tools can be defined in two ways:
+
+1. **`@Tool` macro** — Apply to a function, get an automatic `MCPTool`-conforming struct
+2. **Direct conformance** — Conform your type directly to `MCPTool` for full control
+
+## `@Tool` Macro
+
+The simplest way to create a tool. Apply `@Tool` to a function:
+
+```swift
+@Tool(description: "Get the current weather for a location")
+func getWeather(city: String, unit: String = "celsius", detailed: Bool = false) -> String {
+    let temp = unit == "celsius" ? "22°C" : "72°F"
+    let detail = detailed ? " (humidity: 45%, wind: 12 km/h)" : ""
+    return "The weather in \(city) is \(temp)\(detail)"
+}
+```
+
+The macro generates a struct named `getWeatherTool` conforming to `MCPTool`.
+Parameters without defaults become `@Argument`, parameters with defaults become `@Option`,
+and `Bool` parameters with default `false` become `@Flag`.
+
+Register with a server:
+
+```swift
+let server = MCPServer(name: "weather", version: "1.0.0") {
+    getWeatherTool()
+}
+try await server.runService()
+```
+
+## Direct Conformance
+
+For full control, conform your type directly to `MCPTool`:
+
+```swift
+import MCP
+
+struct GetWeather: MCPTool {
+    static let configuration = MCPToolConfiguration(
+        description: "Get the current weather for a location"
+    )
+
+    @Argument(description: "The city name")
+    var city: String = ""
+
+    @Option(description: "Temperature unit")
+    var unit: String = "celsius"
+
+    @Flag(description: "Use detailed output")
+    var detailed: Bool = false
+
+    func invoke(context: MCPContext) async throws -> MCPToolResult {
+        let temp = unit == "celsius" ? "22°C" : "72°F"
+        let detail = detailed ? " (humidity: 45%, wind: 12 km/h)" : ""
+        return .text("The weather in \(city) is \(temp)\(detail)")
+    }
+}
+```
+
+## Property Wrappers
+
+### @Argument
+
+Required parameters. The caller must provide a value.
+
+```swift
+@Argument(description: "A description of the parameter")
+var name: String = ""
+```
+
+- **Required**: Yes
+- **Default value**: Ignored (placeholder only)
+- **JSON Schema**: Included in `required` array
+- **Enum values**: Optionally constrain to specific values with `enumValues:`
+
+```swift
+@Argument(description: "Log level", enumValues: ["debug", "info", "warning", "error"])
+var level: String = ""
+```
+
+### @Option
+
+Optional parameters with a default value.
+
+```swift
+@Option(description: "Number of times")
+var count: Int = 1
+```
+
+- **Required**: No
+- **Default value**: Used when caller omits the parameter
+- **JSON Schema**: Not in `required` array
+- **Enum values**: Optionally constrain to specific values with `enumValues:`
+
+```swift
+@Option(description: "Output format", enumValues: ["json", "text", "yaml"])
+var format: String = "json"
+```
+
+### @Flag
+
+Boolean flags that default to `false`.
+
+```swift
+@Flag(description: "Enable verbose mode")
+var verbose: Bool = false
+```
+
+- **Required**: No
+- **Default**: `false`
+- **Accepts**: `Bool`, `Int` (nonzero = true), `String` ("true"/"yes"/"1")
+
+### @OptionGroup
+
+Group related parameters into a shared struct.
+
+```swift
+struct SharedOptions {
+    @Option(description: "Verbose output")
+    var verbose: Bool = false
+
+    @Option(description: "Output path")
+    var outputPath: String = "."
+}
+
+struct MyTool: MCPTool {
+    @OptionGroup
+    var options: SharedOptions
+
+    func invoke(context: MCPContext) async throws -> MCPToolResult {
+        // options.verbose, options.outputPath available
+        return .text("done")
+    }
+}
+```
+
+## Supported Types
+
+| Swift Type | JSON Schema Type |
+|---|---|
+| `String` | `"string"` |
+| `Int`, `Int8`–`Int64`, `UInt`, `UInt8`–`UInt64` | `"integer"` |
+| `Double`, `Float`, `Float16`, `CGFloat` | `"number"` |
+| `Bool` | `"boolean"` |
+| `Array<T>` | `"array"` |
+| Everything else | `"object"` |
+
+## Tool Configuration
+
+Provide metadata via `MCPToolConfiguration`:
+
+```swift
+static let configuration = MCPToolConfiguration(
+    description: "What this tool does",
+    name: "custom-tool-name"  // Optional: overrides type-name derivation
+)
+```
+
+If no configuration is provided, the tool uses an empty description and derives its name from the type name (e.g., `GetWeather` → `getWeather`).
+
+## Parameter Discovery
+
+The framework uses `Mirror(reflecting:)` to discover parameters automatically. It looks for stored properties whose backing storage name starts with `_` and whose value conforms to `MCPParamProtocol`. Option groups are recursively flattened.
+
+No manual registration or annotation is needed beyond the property wrappers themselves.
