@@ -57,6 +57,7 @@ struct PropertyInfo {
     let wrapperKind: WrapperKind
     let description: String?
     let hasInitializer: Bool
+    let enumValues: [String]?
 }
 
 // MARK: - MCPCommandMacro
@@ -148,13 +149,15 @@ public struct MCPCommandMacro: ExtensionMacro {
                 }?.as(AttributeSyntax.self)
 
                 let description = attr.flatMap { extractDescription(from: $0) }
+                let enumValues = attr.flatMap { extractEnumValues(from: $0) }
 
                 properties.append(PropertyInfo(
                     name: name,
                     type: typeAnnotation,
                     wrapperKind: kind,
                     description: description,
-                    hasInitializer: hasInitializer
+                    hasInitializer: hasInitializer,
+                    enumValues: enumValues
                 ))
             }
         }
@@ -179,9 +182,20 @@ public struct MCPCommandMacro: ExtensionMacro {
         // Note: the outer `try` is already in the template below
         let invokeCall = isAsyncRun ? "await run()" : "run()"
 
+        let discoveryExpression = generateDiscoveryExpression(properties: properties)
+        let applyBody = generateApplyBody(properties: properties)
+
         let mcpMembers = """
             public static var configuration: MCPToolConfiguration {
                 MCPToolConfiguration(description: "\(description)"\(nameArg)\(accessArg))
+            }
+
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                \(discoveryExpression)
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                \(applyBody)
             }
 
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {

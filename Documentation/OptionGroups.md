@@ -70,7 +70,7 @@ struct ProcessData: MCPTool {
 
 ### Parameter Discovery
 
-When `MCPTool.discoverParameters()` encounters a property conforming to `GroupParamProtocol`, it recursively reflects on the group's wrapped value and flattens its sub-parameters into the parent's parameter list.
+When the `@MCPCommand`/`@Tool` macro encounters an `@MCPOptionGroup` property, it uses the group struct's generated metadata (from `@MCPOptionGroup`) to flatten the group's sub-parameters into the parent's parameter list.
 
 For the `ProcessData` example above, `discoverParameters()` returns:
 - `inputFile` (argument, required)
@@ -80,7 +80,7 @@ For the `ProcessData` example above, `discoverParameters()` returns:
 
 ### Argument Injection
 
-When `MCPTool.apply(arguments:)` encounters a `GroupParamProtocol` conformer, it calls `_groupApply(arguments:)` on the group wrapper, which uses Mirror to find sub-parameters and set their values.
+The generated `apply(arguments:)` handles each `@MCPOptionGroup` property by calling the group struct's generated `mcpApply(arguments:)`, which the `@MCPOptionGroup` macro synthesizes at compile time to set the group's sub-parameters.
 
 ### JSON Schema
 
@@ -101,29 +101,7 @@ The JSON Schema for a tool with option groups includes all flattened parameters 
 
 ## Nested Groups
 
-Option groups can contain other option groups (nesting is supported recursively):
-
-```swift
-struct AuthOptions {
-    @Option(description: "API token")
-    var token: String = ""
-
-    @Option(description: "API endpoint")
-    var endpoint: String = "https://api.example.com"
-}
-
-struct AdvancedOptions {
-    @OptionGroup var auth: AuthOptions
-
-    @Option(description: "Request timeout")
-    var timeout: Int = 30
-}
-
-struct MyTool: MCPTool {
-    @OptionGroup var options: AdvancedOptions
-    // ...
-}
-```
+Groups are shallow: an `@MCPOptionGroup` struct contains only `@Argument`/`@Option`/`@Flag` properties. Nested `@OptionGroup` properties are rejected with a compiler diagnostic, keeping the flattened namespace predictable.
 
 ## Best Practices
 

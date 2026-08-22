@@ -41,7 +41,7 @@ try await server.runService()
 - **`@MCPApplication` macro** — Full server application generation with `@Tool` property wrapper
 - **Property wrappers** — `@Argument`, `@Option`, `@Flag`, `@OptionGroup` for parameter declaration
 - **Automatic JSON Schema** — Tool parameters are automatically described in JSON Schema Draft 7
-- **Mirror-based discovery** — No manual parameter registration required
+- **Compile-time discovery** — Parameters are discovered via macro-generated code, no runtime reflection
 - **Option groups** — Share common parameters across tools with `@OptionGroup`
 - **Stdio transport** — Standard MCP transport for subprocess-based clients
 - **TCP transport** — IPv4, IPv6, dual-stack, and Unix domain socket support
@@ -252,7 +252,7 @@ server.unregister("get_weather")  // Remove a tool at runtime
 |---|---|
 | `MCPTool` | The main protocol for defining MCP tools |
 | `MCPParamProtocol` | Protocol for parameter property wrappers |
-| `GroupParamProtocol` | Protocol for container wrappers (option groups) |
+| `StaticMCPGroup` | Macro-generated metadata protocol for option-group structs |
 | `MCPTransport` | Protocol for transport layer abstraction |
 
 ### Property Wrappers (Framework-Level)

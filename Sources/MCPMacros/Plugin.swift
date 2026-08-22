@@ -7,5 +7,6 @@ struct MCPMacroPlugin: CompilerPlugin {
         MCPCommandMacro.self,
         MCPApplicationMacro.self,
         ToolMacro.self,
+        MCPOptionGroupMacro.self,
     ]
 }

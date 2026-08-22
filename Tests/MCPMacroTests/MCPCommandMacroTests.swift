@@ -33,7 +33,24 @@ func mcpCommandWithArgument() {
                 MCPToolConfiguration(description: "Test command")
             }
 
-            public func invoke(context: MCPContext) async throws -> MCPToolResult {
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                [] + [MCPParameterInfo(name: "name", description: "A name", required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil)]
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                var setParams = Set<String>()
+                if let value = arguments["name"] {
+                    try self._name._setValue(value)
+                    setParams.insert("name")
+                }
+                for param in Self.discoverParameters() where param.required {
+                    if !setParams.contains(param.name) {
+                        throw MCPError.missingArgument(param.name)
+                    }
+                }
+            }
+
+            public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                 let output = try await run()
                 return .text(String(describing: output))
             }
@@ -65,7 +82,7 @@ func mcpCommandWithOption() {
             var count: Int = 1
 
             func run() async throws -> String {
-                return "\\\\(count)"
+                return "\\\\\\(count)"
             }
         }
         """,
@@ -75,7 +92,7 @@ func mcpCommandWithOption() {
             var count: Int = 1
 
             func run() async throws -> String {
-                return "\\\\(count)"
+                return "\\\\\\(count)"
             }
         }
 
@@ -84,7 +101,24 @@ func mcpCommandWithOption() {
                 MCPToolConfiguration(description: "Test")
             }
 
-            public func invoke(context: MCPContext) async throws -> MCPToolResult {
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                [] + [MCPParameterInfo(name: "count", description: "Count", required: false, kind: .option, typeName: "Int", hasDefault: true, enumValues: nil)]
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                var setParams = Set<String>()
+                if let value = arguments["count"] {
+                    try self._count._setValue(value)
+                    setParams.insert("count")
+                }
+                for param in Self.discoverParameters() where param.required {
+                    if !setParams.contains(param.name) {
+                        throw MCPError.missingArgument(param.name)
+                    }
+                }
+            }
+
+            public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                 let output = try await run()
                 return .text(String(describing: output))
             }
@@ -135,7 +169,24 @@ func mcpCommandWithFlag() {
                 MCPToolConfiguration(description: "Test")
             }
 
-            public func invoke(context: MCPContext) async throws -> MCPToolResult {
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                [] + [MCPParameterInfo(name: "verbose", description: "Verbose mode", required: false, kind: .flag, typeName: "Bool", hasDefault: true, enumValues: nil)]
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                var setParams = Set<String>()
+                if let value = arguments["verbose"] {
+                    try self._verbose._setValue(value)
+                    setParams.insert("verbose")
+                }
+                for param in Self.discoverParameters() where param.required {
+                    if !setParams.contains(param.name) {
+                        throw MCPError.missingArgument(param.name)
+                    }
+                }
+            }
+
+            public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                 let output = try await run()
                 return .text(String(describing: output))
             }
@@ -182,7 +233,24 @@ func mcpCommandWithName() {
                 MCPToolConfiguration(description: "Test", name: "my-test")
             }
 
-            public func invoke(context: MCPContext) async throws -> MCPToolResult {
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                [] + [MCPParameterInfo(name: "value", description: "A value", required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil)]
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                var setParams = Set<String>()
+                if let value = arguments["value"] {
+                    try self._value._setValue(value)
+                    setParams.insert("value")
+                }
+                for param in Self.discoverParameters() where param.required {
+                    if !setParams.contains(param.name) {
+                        throw MCPError.missingArgument(param.name)
+                    }
+                }
+            }
+
+            public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                 let output = try await run()
                 return .text(String(describing: output))
             }
@@ -241,7 +309,32 @@ func mcpCommandMixed() {
                 MCPToolConfiguration(description: "Mixed test")
             }
 
-            public func invoke(context: MCPContext) async throws -> MCPToolResult {
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                [] + [MCPParameterInfo(name: "input", description: "Required input", required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil)] + [MCPParameterInfo(name: "multiplier", description: "Optional multiplier", required: false, kind: .option, typeName: "Int", hasDefault: true, enumValues: nil)] + [MCPParameterInfo(name: "verbose", description: "Enable verbose output", required: false, kind: .flag, typeName: "Bool", hasDefault: true, enumValues: nil)]
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                var setParams = Set<String>()
+                if let value = arguments["input"] {
+                    try self._input._setValue(value)
+                    setParams.insert("input")
+                }
+                if let value = arguments["multiplier"] {
+                    try self._multiplier._setValue(value)
+                    setParams.insert("multiplier")
+                }
+                if let value = arguments["verbose"] {
+                    try self._verbose._setValue(value)
+                    setParams.insert("verbose")
+                }
+                for param in Self.discoverParameters() where param.required {
+                    if !setParams.contains(param.name) {
+                        throw MCPError.missingArgument(param.name)
+                    }
+                }
+            }
+
+            public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                 let output = try await run()
                 return .text(String(describing: output))
             }
@@ -296,7 +389,31 @@ func mcpCommandWithOptionGroup() {
                 MCPToolConfiguration(description: "Command with shared options")
             }
 
-            public func invoke(context: MCPContext) async throws -> MCPToolResult {
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                [] + [MCPParameterInfo(name: "value", description: "A required value", required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil)] + SharedOptions.mcpParameters
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                var setParams = Set<String>()
+                if let value = arguments["value"] {
+                    try self._value._setValue(value)
+                    setParams.insert("value")
+                }
+                let groupParamNames = SharedOptions.mcpParameters.map(\\.name)
+                if arguments.keys.contains(where: { groupParamNames.contains($0) }) {
+                    try self._shared.mcpApply(arguments: arguments)
+                    for gp in SharedOptions.mcpParameters where arguments[gp.name] != nil {
+                        setParams.insert(gp.name)
+                    }
+                }
+                for param in Self.discoverParameters() where param.required {
+                    if !setParams.contains(param.name) {
+                        throw MCPError.missingArgument(param.name)
+                    }
+                }
+            }
+
+            public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                 let output = try await run()
                 return .text(String(describing: output))
             }
@@ -316,6 +433,47 @@ func mcpCommandWithOptionGroup() {
         }
         """,
         macros: ["MCPCommand": MCPCommandMacro.self]
+    )
+}
+
+@Test("MCPOptionGroup generates StaticMCPGroup conformance")
+func mcpOptionGroupMacro() {
+    assertMacroExpansion(
+        """
+        @MCPOptionGroup
+        struct SharedOptions {
+            @Option(description: "Verbose output")
+            var verbose: Bool = false
+
+            @Option(description: "Output path")
+            var outputPath: String = "."
+        }
+        """,
+        expandedSource: """
+        struct SharedOptions {
+            @Option(description: "Verbose output")
+            var verbose: Bool = false
+
+            @Option(description: "Output path")
+            var outputPath: String = "."
+        }
+
+        extension SharedOptions: StaticMCPGroup {
+            public static var mcpParameters: [MCPParameterInfo] {
+                [] + [MCPParameterInfo(name: "verbose", description: "Verbose output", required: false, kind: .option, typeName: "Bool", hasDefault: true, enumValues: nil)] + [MCPParameterInfo(name: "outputPath", description: "Output path", required: false, kind: .option, typeName: "String", hasDefault: true, enumValues: nil)]
+            }
+
+            public mutating func mcpApply(arguments: [String: Any]) throws {
+                if let value = arguments["verbose"] {
+                    try self._verbose._setValue(value)
+                }
+                if let value = arguments["outputPath"] {
+                    try self._outputPath._setValue(value)
+                }
+            }
+        }
+        """,
+        macros: ["MCPOptionGroup": MCPOptionGroupMacro.self]
     )
 }
 
@@ -472,13 +630,13 @@ func toolMacroSimple() {
         @FuncTool(description: "Greet someone")
         func greet(name: String, count: Int = 1, formal: Bool = false) -> String {
             let greeting = formal ? "Greetings" : "Hello"
-            return "\\(greeting), \\(name)!"
+            return "\\\\(greeting), \\\\(name)!"
         }
         """,
         expandedSource: """
         func greet(name: String, count: Int = 1, formal: Bool = false) -> String {
             let greeting = formal ? "Greetings" : "Hello"
-            return "\\(greeting), \\(name)!"
+            return "\\\\(greeting), \\\\(name)!"
         }
 
         /// Auto-generated MCP tool for `greet`.
@@ -489,6 +647,31 @@ func toolMacroSimple() {
 
             public static var configuration: MCPToolConfiguration {
                 MCPToolConfiguration(description: "Greet someone")
+            }
+
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                [] + [MCPParameterInfo(name: "name", description: nil, required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil)] + [MCPParameterInfo(name: "count", description: nil, required: false, kind: .option, typeName: "Int", hasDefault: true, enumValues: nil)] + [MCPParameterInfo(name: "formal", description: nil, required: false, kind: .flag, typeName: "Bool", hasDefault: true, enumValues: nil)]
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                var setParams = Set<String>()
+                if let value = arguments["name"] {
+                    try self._name._setValue(value)
+                    setParams.insert("name")
+                }
+                if let value = arguments["count"] {
+                    try self._count._setValue(value)
+                    setParams.insert("count")
+                }
+                if let value = arguments["formal"] {
+                    try self._formal._setValue(value)
+                    setParams.insert("formal")
+                }
+                for param in Self.discoverParameters() where param.required {
+                    if !setParams.contains(param.name) {
+                        throw MCPError.missingArgument(param.name)
+                    }
+                }
             }
 
             public func run() -> String {
@@ -511,12 +694,12 @@ func toolMacroWithOptions() {
         """
         @FuncTool(description: "Admin operation", name: "admin-op", requiredAccess: .admin)
         func adminOp(userId: String) -> String {
-            return "Deleted \\(userId)"
+            return "Deleted \\\\(userId)"
         }
         """,
         expandedSource: """
         func adminOp(userId: String) -> String {
-            return "Deleted \\(userId)"
+            return "Deleted \\\\(userId)"
         }
 
         /// Auto-generated MCP tool for `adminOp`.
@@ -525,6 +708,23 @@ func toolMacroWithOptions() {
 
             public static var configuration: MCPToolConfiguration {
                 MCPToolConfiguration(description: "Admin operation", name: "admin-op", requiredAccess: .admin)
+            }
+
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                [] + [MCPParameterInfo(name: "userId", description: nil, required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil)]
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                var setParams = Set<String>()
+                if let value = arguments["userId"] {
+                    try self._userId._setValue(value)
+                    setParams.insert("userId")
+                }
+                for param in Self.discoverParameters() where param.required {
+                    if !setParams.contains(param.name) {
+                        throw MCPError.missingArgument(param.name)
+                    }
+                }
             }
 
             public func run() -> String {
@@ -563,6 +763,23 @@ func toolMacroAsync() {
 
             public static var configuration: MCPToolConfiguration {
                 MCPToolConfiguration(description: "Fetch data")
+            }
+
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                [] + [MCPParameterInfo(name: "url", description: nil, required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil)]
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                var setParams = Set<String>()
+                if let value = arguments["url"] {
+                    try self._url._setValue(value)
+                    setParams.insert("url")
+                }
+                for param in Self.discoverParameters() where param.required {
+                    if !setParams.contains(param.name) {
+                        throw MCPError.missingArgument(param.name)
+                    }
+                }
             }
 
             public func run() async throws -> String {

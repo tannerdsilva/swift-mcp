@@ -10,9 +10,6 @@
 //===----------------------------------------------------------------------===//
 
 import Foundation
-import Logging
-
-private let paramDiscoveryLogger = Logger(label: "MCP.ParameterDiscovery")
 
 // MARK: - MCPTool
 
@@ -61,7 +58,17 @@ public protocol MCPTool: Sendable {
     init()
 
     /// Applies the given arguments to the tool's parameters.
+    ///
+    /// Macro-generated conformances set each property wrapper's value from
+    /// the arguments dictionary; the default implementation is a no-op for
+    /// conformers that read ``MCPContext/arguments`` directly.
     mutating func apply(arguments: [String: Any]) throws
+
+    /// Discovers the parameters of this tool.
+    ///
+    /// Macro-generated conformances return static parameter metadata emitted
+    /// at compile time; the default implementation returns no parameters.
+    static func discoverParameters() -> [MCPParameterInfo]
 
     /// Invoke the tool's logic.
     ///
@@ -129,88 +136,17 @@ extension MCPTool {
     }
 }
 
-// MARK: - Parameter discovery
+// MARK: - Parameter discovery and application defaults
 
 extension MCPTool {
-    /// Discovers the parameters of this tool by reflecting on an instance.
-    static func discoverParameters() -> [MCPParameterInfo] {
-        let instance = Self()
-        return _discoverParameters(from: instance)
-    }
+    /// default implementation: conformers that read ``MCPContext/arguments``
+    /// directly need no injection, so application is a no-op.
+    public mutating func apply(arguments: [String: Any]) throws {}
 
-    /// Applies the given arguments to the tool's parameters.
-    public mutating func apply(arguments: [String: Any]) throws {
-        let mirror = Mirror(reflecting: self)
-        let params = Self.discoverParameters()
-        var setParams = Set<String>()
-
-        for child in mirror.children {
-            guard let label = child.label, label.hasPrefix("_") else { continue }
-            let propertyName = String(label.dropFirst())
-
-            if let param = child.value as? MCPParamProtocol {
-                if let value = arguments[propertyName] {
-                    try param._setValue(value)
-                    setParams.insert(propertyName)
-                }
-            } else if let group = child.value as? GroupParamProtocol {
-                try group._groupApply(arguments: arguments)
-                let groupParams = _discoverParameters(from: group._groupWrappedValue)
-                for gp in groupParams {
-                    if arguments[gp.name] != nil {
-                        setParams.insert(gp.name)
-                    }
-                }
-            }
-        }
-
-        // Check for missing required arguments
-        for param in params where param.required {
-            if !setParams.contains(param.name) {
-                throw MCPError.missingArgument(param.name)
-            }
-        }
-    }
-}
-
-// MARK: - Internal discovery helper (free function to avoid protocol dispatch issues)
-
-/// Recursively discovers parameters from an arbitrary value via Mirror.
-internal func _discoverParameters(from value: Any) -> [MCPParameterInfo] {
-    let mirror = Mirror(reflecting: value)
-    var params: [MCPParameterInfo] = []
-
-    for child in mirror.children {
-        guard let label = child.label, label.hasPrefix("_") else { continue }
-        let propertyName = String(label.dropFirst())
-
-        if let param = child.value as? MCPParamProtocol {
-            params.append(MCPParameterInfo(
-                name: propertyName,
-                description: param._paramDescription,
-                required: param._paramRequired,
-                kind: param._paramKind,
-                typeName: param._paramTypeName,
-                hasDefault: param._paramHasDefault,
-                enumValues: param._paramEnumValues
-            ))
-        } else if let group = child.value as? GroupParamProtocol {
-            let groupParams = _discoverParameters(from: group._groupWrappedValue)
-            params.append(contentsOf: groupParams)
-        }
-    }
-
-    // Warn if no parameters were found — this could indicate the type
-    // uses struct-based property wrappers that Mirror cannot inspect.
-    if params.isEmpty {
-        let typeName = "\(type(of: value))"
-        if typeName != "()" {
-            // Only warn for non-empty types
-            paramDiscoveryLogger.warning("No parameters discovered for \(typeName). Ensure all parameter wrappers are classes (not structs) so Mirror can find them.")
-        }
-    }
-
-    return params
+    /// default implementation: conformers with no declared parameters
+    /// advertise nothing. Macro-generated conformances override this with
+    /// compile-time parameter metadata.
+    public static func discoverParameters() -> [MCPParameterInfo] { [] }
 }
 
 // MARK: - MCPContext

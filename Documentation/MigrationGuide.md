@@ -37,8 +37,8 @@ var count: Int = 1
 
 ### New Features in 1.0.0
 
-- **Option Groups**: `@OptionGroup` / `@OptionGroup` for sharing parameters across tools
-- **GroupParamProtocol**: Protocol for container wrappers with recursive flattening
+- **Option Groups**: `@OptionGroup` for sharing parameters across tools
+- **StaticMCPGroup**: Protocol for macro-generated option-group metadata (flattened at compile time by `@MCPOptionGroup`)
 - **Full documentation**: Comprehensive doc comments on all public symbols
 - **Documentation suite**: Getting started guide, tool definition guide, macro guide, architecture docs
 

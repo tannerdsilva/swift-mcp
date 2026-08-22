@@ -19,7 +19,7 @@
 /// - ``option``: An optional parameter with a default value. The caller can
 ///   omit it. Maps to `@Option`.
 /// - ``flag``: A boolean flag that defaults to `false`. Maps to `@Flag`.
-enum MCPParamKind: String, Sendable, Equatable, Codable {
+public enum MCPParamKind: String, Sendable, Equatable, Codable {
     /// A required positional/named parameter.
     case argument
     /// An optional parameter with a default value.
@@ -37,7 +37,7 @@ enum MCPParamKind: String, Sendable, Equatable, Codable {
 /// This information is used by JSONSchemaBuilder to generate JSON Schema
 /// for the `tools/list` response, and by ``MCPTool/apply(arguments:)`` to
 /// validate required arguments.
-struct MCPParameterInfo: Sendable, Equatable, Codable {
+public struct MCPParameterInfo: Sendable, Equatable, Codable {
     /// The parameter name (e.g. "city", "count").
     ///
     /// This is derived from the property name by stripping the leading `_`
@@ -114,14 +114,14 @@ struct MCPParameterInfo: Sendable, Equatable, Codable {
 
 /// Protocol that individual parameter property wrappers conform to.
 ///
-/// ``MCPParamProtocol`` defines the interface that the framework uses to
-/// discover and interact with tool parameters via `Mirror` reflection.
-/// All property wrappers (`@Argument`, `@Option`, `@Flag`) conform to this protocol.
+/// ``MCPParamProtocol`` defines the interface the framework uses to interact
+/// with tool parameters at runtime. All property wrappers (`@Argument`,
+/// `@Option`, `@Flag`) conform to this protocol as value types.
 ///
-/// The underscore-prefixed property names are intentional: they are accessed
-/// via `Mirror` on the backing storage (which also uses underscore prefixes),
-/// making them discoverable while keeping the API surface clean for users.
-protocol MCPParamProtocol: AnyObject, Sendable {
+/// Parameter metadata is emitted at compile time by the ``MCPCommand`` and
+/// ``MCPOptionGroup`` macros via ``MCPTool/discoverParameters()``, so this
+/// protocol only carries the runtime accessors for argument injection.
+protocol MCPParamProtocol: Sendable {
     /// A human-readable description of this parameter.
     var _paramDescription: String? { get }
 
@@ -145,7 +145,7 @@ protocol MCPParamProtocol: AnyObject, Sendable {
     /// - Parameter value: The value to set, as decoded from JSON.
     /// - Throws: ``MCPError/typeMismatch(expected:actual:)`` if the value
     ///   cannot be converted to the expected type.
-    func _setValue(_ value: Any) throws
+    mutating func _setValue(_ value: Any) throws
 
     /// Get the current wrapped value as an `Any` for JSON encoding.
     ///
@@ -247,26 +247,22 @@ public struct MCPCallerInfo: Sendable {
     }
 }
 
-// MARK: - GroupParamProtocol
+// MARK: - StaticMCPGroup
 
-/// Protocol that container wrappers (like ``OptionGroup``) conform to.
+/// Protocol for macro-generated option-group metadata.
 ///
-/// Container wrappers hold a sub-struct whose own `@Argument`/`@Option`/`@Flag`
-/// properties should be flattened into the parent's parameter space. The framework
-/// discovers group wrappers via `Mirror` and recursively processes their contents.
-///
-/// Conforming types must provide access to the wrapped value and a method to
-/// apply arguments to the group's sub-parameters.
-protocol GroupParamProtocol: AnyObject, Sendable {
-    /// The wrapped value (the group struct whose properties should be flattened).
-    ///
-    /// The framework uses `Mirror` on this value to discover sub-parameters.
-    var _groupWrappedValue: Any { get }
+/// Conforming types are option-group structs annotated with ``MCPOptionGroup``.
+/// The macro synthesizes static parameter metadata and an argument-apply
+/// method so the parent ``MCPTool`` conformance can flatten groups at compile
+/// time without reflection.
+public protocol StaticMCPGroup: Sendable {
+    /// The flattened parameter metadata for this group.
+    static var mcpParameters: [MCPParameterInfo] { get }
 
-    /// Apply a set of arguments to the group's sub-parameters.
+    /// Apply a set of arguments to the group's parameters.
     ///
     /// - Parameter arguments: A dictionary of argument names to values.
     /// - Throws: ``MCPError/typeMismatch(expected:actual:)`` if a value cannot
     ///   be converted to the expected type.
-    func _groupApply(arguments: [String: Any]) throws
+    mutating func mcpApply(arguments: [String: Any]) throws
 }

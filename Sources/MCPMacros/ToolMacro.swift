@@ -139,6 +139,20 @@ public struct ToolMacro: PeerMacro {
 
         let callExpr = "\(funcName)(\(callArgs.joined(separator: ", ")))"
 
+        let propertyInfos = params.map { param in
+            let kind: WrapperKind = !param.hasDefault ? .argument : (param.isBool ? .flag : .option)
+            return PropertyInfo(
+                name: param.name,
+                type: param.type,
+                wrapperKind: kind,
+                description: nil,
+                hasInitializer: param.hasDefault,
+                enumValues: nil
+            )
+        }
+        let discoveryExpression = generateDiscoveryExpression(properties: propertyInfos)
+        let applyBody = generateApplyBody(properties: propertyInfos)
+
         let asyncModifier = isAsync ? "async " : ""
         let throwModifier = isThrowing ? "throws " : ""
         let tryPrefix = isThrowing ? "try " : ""
@@ -166,6 +180,14 @@ public struct ToolMacro: PeerMacro {
 
             public static var configuration: MCPToolConfiguration {
                 MCPToolConfiguration(description: "\(description)"\(nameArg)\(accessArg))
+            }
+
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                \(discoveryExpression)
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                \(applyBody)
             }
 
             public func run() \(asyncModifier)\(throwModifier)-> String {

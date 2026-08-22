@@ -4,12 +4,8 @@ import Foundation
 
 // MARK: - Test Tools
 
-struct Greet: MCPTool {
-    static let configuration = MCPToolConfiguration(
-        description: "Greet someone by name",
-        name: "greet"
-    )
-
+@MCPCommand(description: "Greet someone by name", name: "greet")
+struct Greet {
     @Argument(description: "The name of the person to greet")
     var name: String = ""
 
@@ -19,13 +15,14 @@ struct Greet: MCPTool {
     @Flag(description: "Use formal greeting")
     var formal: Bool = false
 
-    func invoke(context: MCPContext) async throws -> MCPToolResult {
+    func run() async throws -> String {
         let greeting = formal ? "Greetings" : "Hello"
-        let message = Array(repeating: "\(greeting), \(name)!", count: count).joined(separator: "\n")
-        return .text(message)
+        return Array(repeating: "\(greeting), \(name)!", count: count).joined(separator: "\n")
     }
 }
 
+// Hand-written conformer with explicit static discovery — the documented
+// migration path for tools that cannot use the macro.
 struct Calculator: MCPTool {
     static let configuration = MCPToolConfiguration(
         description: "Perform arithmetic",
@@ -40,6 +37,20 @@ struct Calculator: MCPTool {
 
     @Argument(description: "Operation")
     var operation: String = "add"
+
+    static func discoverParameters() -> [MCPParameterInfo] {
+        [
+            MCPParameterInfo(name: "a", description: "First operand", required: true, kind: .argument, typeName: "Double", hasDefault: false, enumValues: nil),
+            MCPParameterInfo(name: "b", description: "Second operand", required: true, kind: .argument, typeName: "Double", hasDefault: false, enumValues: nil),
+            MCPParameterInfo(name: "operation", description: "Operation", required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil),
+        ]
+    }
+
+    mutating func apply(arguments: [String: Any]) throws {
+        if let value = arguments["a"] { try self._a._setValue(value) }
+        if let value = arguments["b"] { try self._b._setValue(value) }
+        if let value = arguments["operation"] { try self._operation._setValue(value) }
+    }
 
     func invoke(context: MCPContext) async throws -> MCPToolResult {
         let result: Double
@@ -68,10 +79,33 @@ struct AsyncGreet: AsyncMCPTool {
     @Argument(description: "The name of the person to greet")
     var name: String = ""
 
+    static func discoverParameters() -> [MCPParameterInfo] {
+        [
+            MCPParameterInfo(name: "name", description: "The name of the person to greet", required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil),
+        ]
+    }
+
+    mutating func apply(arguments: [String: Any]) throws {
+        if let value = arguments["name"] { try self._name._setValue(value) }
+    }
+
     func invoke(context: MCPContext) async throws -> MCPToolResult {
         // Simulate async work
         let greeting = try await String("Hello, \(name)!")
         return .text(greeting)
+    }
+}
+
+// A zero-wrapper conformer that reads context.arguments directly.
+// Its discovery/apply must fall back to the empty defaults (no reflection).
+struct DynamicEchoTool: MCPTool {
+    static let configuration = MCPToolConfiguration(
+        description: "Echoes an argument back",
+        name: "echo"
+    )
+
+    func invoke(context: MCPContext) async throws -> MCPToolResult {
+        .text(String(describing: context.arguments["message"] as? String ?? "nil"))
     }
 }
 
@@ -333,7 +367,9 @@ func errorDescriptions() {
 
 // MARK: - Option Group Tests
 
-/// Shared options struct for testing option groups.
+// Shared options struct for testing option groups — metadata is generated
+// at compile time by @MCPOptionGroup.
+@MCPOptionGroup
 struct SharedPrintOptions {
     @Option(description: "Enable verbose output")
     var verbose: Bool = false
@@ -342,23 +378,25 @@ struct SharedPrintOptions {
     var copies: Int = 1
 }
 
-struct PrintTool: MCPTool {
-    static let configuration = MCPToolConfiguration(
-        description: "Print a message",
-        name: "print"
-    )
-
+@MCPCommand(description: "Print a message", name: "print")
+struct PrintTool {
     @Argument(description: "Message to print")
     var message: String = ""
 
     @OptionGroup
     var printOptions: SharedPrintOptions = SharedPrintOptions()
 
-    func invoke(context: MCPContext) async throws -> MCPToolResult {
+    func run() async throws -> String {
         let prefix = printOptions.verbose ? "[VERBOSE] " : ""
-        let output = Array(repeating: "\(prefix)\(message)", count: printOptions.copies).joined(separator: "\n")
-        return .text(output)
+        return Array(repeating: "\(prefix)\(message)", count: printOptions.copies).joined(separator: "\n")
     }
+}
+
+@Test("Zero-wrapper conformer uses empty defaults")
+func zeroWrapperDefaults() {
+    #expect(DynamicEchoTool.discoverParameters().isEmpty)
+    var tool = DynamicEchoTool()
+    #expect(throws: Never.self) { try tool.apply(arguments: ["message": "hi"]) }
 }
 
 @Test("Option group parameters are flattened in discovery")
@@ -590,6 +628,14 @@ func toolWithOnlyOptionals() async throws {
         @Option(description: "Optional value")
         var value: String = "default"
 
+        static func discoverParameters() -> [MCPParameterInfo] {
+            [MCPParameterInfo(name: "value", description: "Optional value", required: false, kind: .option, typeName: "String", hasDefault: true, enumValues: nil)]
+        }
+
+        mutating func apply(arguments: [String: Any]) throws {
+            if let value = arguments["value"] { try self._value._setValue(value) }
+        }
+
         func invoke(context: MCPContext) async throws -> MCPToolResult { .text(value) }
     }
 
@@ -663,7 +709,7 @@ func parameterInfoCodable() throws {
 
 @Test("Flag accepts various truthy values")
 func flagTruthyValues() throws {
-    let flag = Flag()
+    var flag = Flag()
 
     try flag._setValue(true as Bool)
     #expect(flag.wrappedValue == true)
@@ -683,7 +729,7 @@ func flagTruthyValues() throws {
 
 @Test("Flag accepts various falsy values")
 func flagFalsyValues() throws {
-    let flag = Flag(wrappedValue: true)
+    var flag = Flag(wrappedValue: true)
 
     try flag._setValue(false as Bool)
     #expect(flag.wrappedValue == false)
@@ -703,7 +749,7 @@ func flagFalsyValues() throws {
 
 @Test("Flag throws on invalid string")
 func flagInvalidString() {
-    let flag = Flag()
+    var flag = Flag()
     #expect(throws: MCPError.self) {
         try flag._setValue("invalid" as String)
     }
@@ -711,7 +757,7 @@ func flagInvalidString() {
 
 @Test("Flag throws on unsupported type")
 func flagUnsupportedType() {
-    let flag = Flag()
+    var flag = Flag()
     #expect(throws: MCPError.self) {
         try flag._setValue([1, 2, 3])
     }
@@ -1130,6 +1176,14 @@ func parameterEnumValues() async throws {
     struct EnumTool: MCPTool {
         @Argument(description: "Log level", enumValues: ["debug", "info", "warning", "error"])
         var level: String = ""
+
+        static func discoverParameters() -> [MCPParameterInfo] {
+            [MCPParameterInfo(name: "level", description: "Log level", required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: ["debug", "info", "warning", "error"])]
+        }
+
+        mutating func apply(arguments: [String: Any]) throws {
+            if let value = arguments["level"] { try self._level._setValue(value) }
+        }
 
         func run(context: MCPContext) async throws -> MCPToolResult {
             return .text(level)

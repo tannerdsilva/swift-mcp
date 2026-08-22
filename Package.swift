@@ -85,7 +85,7 @@ let package = Package(
         // --- Unit tests ---
         .testTarget(
             name: "MCPTests",
-            dependencies: ["MCP"],
+            dependencies: ["MCP", "MCPMacros"],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
                 .swiftLanguageMode(.v6),

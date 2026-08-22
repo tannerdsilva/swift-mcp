@@ -30,36 +30,39 @@ swift-mcp is organized into several layers:
 
 ## Core Design Decisions
 
-### Property Wrappers Are Classes
+### Property Wrappers Are Value Types
 
-All property wrappers (`@Argument`, `@Option`, `@Flag`, `@OptionGroup`, `@Argument`, `@Option`, `@Flag`, `@OptionGroup`) are implemented as **classes** (not structs) conforming to `@unchecked Sendable`.
+All property wrappers (`@Argument`, `@Option`, `@Flag`, `@OptionGroup` — the same types work for both direct `MCPTool` conformance and the `@MCPCommand` macro) are implemented as **structs** (value types) conforming to `MCPParamProtocol` (and `StaticMCPGroup` is synthesized onto option-group structs by `@MCPOptionGroup`). No `AnyObject` constraint and no `@unchecked Sendable` are needed.
 
-**Why**: Mirror reflection on a tool instance returns mutable references to the wrapper objects, allowing the framework to inject argument values into the wrappers after initialization. A struct-based wrapper would be copied by Mirror, making mutation impossible.
+**Why**: Parameter discovery and argument injection are generated at compile time by the macros, so the framework never reflects on wrapper instances at runtime. Value types keep the wrappers simple and give `Sendable` conformance for free.
 
-### Mirror-Based Parameter Discovery
+### Compile-Time Parameter Discovery
 
-The framework uses `Mirror(reflecting:)` to discover parameters at runtime, avoiding the need for manual registration or compile-time code generation (beyond the optional macro).
+Parameter discovery is generated at compile time by the `@MCPCommand`/`@Tool` macros — no reflection, no manual registration.
 
 **How it works**:
-1. `MCPTool.discoverParameters()` creates an instance and reflects on it
-2. It looks for children whose label starts with `_` (the synthesized backing-storage name for property wrappers)
-3. Children conforming to `MCPParamProtocol` are added to the parameter list
-4. Children conforming to `GroupParamProtocol` are recursively flattened
+1. The macro parses the struct's member declarations with SwiftSyntax
+2. Each property wrapped in `@Argument`/`@Option`/`@Flag` becomes an `MCPParameterInfo` entry in a statically-typed `discoverParameters()`
+3. Each `@MCPOptionGroup` property is flattened into the parent's parameter list using the group's generated metadata
+4. `apply(arguments:)` is generated with direct `_setValue(_:)` calls
 
-### Free Function for Discovery
+### Option-Group Macro
 
-The `_discoverParameters(from:)` function is a free function rather than a protocol extension method.
+`@MCPOptionGroup` attaches to an option-group struct and generates its flattened parameter metadata plus an `mcpApply(arguments:)` method on the group type itself:
 
-**Why**: Swift protocol dispatch has limitations with static methods in protocol extensions when called from instance context. A free function avoids these issues entirely.
+```swift
+@MCPOptionGroup
+struct SharedOptions {
+    @Option(description: "Verbose output") var verbose: Bool = false
+    @Option(description: "Output path")    var outputPath: String = "."
+}
+```
 
-### Dual-Use Wrappers vs Framework Wrappers
+**Why**: Generating the group's metadata and apply logic at compile time lets the parent `@MCPCommand` macro inline the group's parameters without runtime reflection, and the group stays a plain value type.
 
-There are two sets of property wrappers:
+### One Wrapper Set
 
-- **Framework wrappers** (`@Argument`, `@Option`, `@Flag`, `@OptionGroup`): Used with direct `MCPTool` conformance
-- **Dual-use wrappers** (`@Argument`, `@Option`, `@Flag`, `@OptionGroup`): Used with the `@MCPCommand` macro
-
-Both sets conform to the same internal protocols (`MCPParamProtocol`, `GroupParamProtocol`), so the framework treats them identically.
+The project has a **single set** of property wrappers — `@Argument`, `@Option`, `@Flag`, `@OptionGroup` — used both with direct `MCPTool` conformance and with the `@MCPCommand` macro. They are value-type structs conforming to `MCPParamProtocol`; option-group structs gain a `StaticMCPGroup` conformance from `@MCPOptionGroup`, so the macros generate identical code for either usage.
 
 ### Macro Architecture
 
@@ -67,7 +70,7 @@ The `@MCPCommand` macro is an `@attached(extension, conformances: MCPTool)` macr
 
 1. Parses the struct's member declarations using SwiftSyntax
 2. Identifies `@Argument`, `@Option`, `@Flag`, and `@OptionGroup` wrapped properties
-3. Generates an extension with `MCPTool` conformance and a nested `CLI` struct
+3. Generates an extension with `MCPTool` conformance — including `discoverParameters()` and `apply(arguments:)` — and a nested `CLI` struct
 
 The CLI struct is wrapped in `#if canImport(ArgumentParser)` so it compiles away when ArgumentParser is not available.
 
@@ -100,20 +103,26 @@ Client                    Server                    Tool
   │<── JSON-RPC response ───│                        │
 ```
 
-### Parameter Discovery
+### Parameter Discovery (Compile Time)
 
 ```
-discoverParameters()
-  │
-  ├── Mirror(reflecting: instance)
-  │     │
-  │     ├── _name: MCPParamProtocol  →  MCPParameterInfo
-  │     ├── _count: MCPParamProtocol →  MCPParameterInfo
-  │     └── _options: GroupParamProtocol
-  │           │
-  │           └── Mirror(reflecting: options)
-  │                 ├── _verbose: MCPParamProtocol → MCPParameterInfo
-  │                 └── _path: MCPParamProtocol    → MCPParameterInfo
-  │
-  └── [MCPParameterInfo, MCPParameterInfo, ...]
+             source struct (read by SwiftSyntax)
+@MCPCommand struct Greet
+         │
+         ├── parser reads member declarations
+         │      ├── @Argument _name
+         │      ├── @Option   _count
+         │      └── @OptionGroup _shared: SharedOptions
+         │              └── @MCPOptionGroup flattens group metadata
+         │                    ├── _verbose → MCPParameterInfo
+         │                    └── _path    → MCPParameterInfo
+         │
+         ├── generates discoverParameters() → [MCPParameterInfo]
+         │      ├── name, count
+         │      └── verbose, path (flattened from SharedOptions metadata)
+         │
+         └── generates apply(arguments:)
+                ├── arguments["name"]  → _name._setValue(...)
+                ├── arguments["count"] → _count._setValue(...)
+                └── arguments["verbose"] → SharedOptions.mcpApply(arguments)
 ```

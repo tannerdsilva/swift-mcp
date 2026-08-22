@@ -80,7 +80,7 @@ swift-mcp is a Swift framework for building MCP servers. It provides:
 - ``MCPParamKind``
 - ``MCPParameterInfo``
 - ``MCPParamProtocol``
-- ``GroupParamProtocol``
+- ``StaticMCPGroup``
 - ``ToolAvailability``
 - ``Tool``
 

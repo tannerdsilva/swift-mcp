@@ -80,12 +80,35 @@
 ///     Greet()
 /// }
 /// ```
-@attached(extension, conformances: MCPTool, names: named(configuration), named(invoke), named(CLI))
+@attached(extension, conformances: MCPTool, names: named(configuration), named(invoke), named(CLI), named(discoverParameters), named(apply))
 public macro MCPCommand(
     description: String = "",
     name: String? = nil,
     requiredAccess: AccessLevel = .public
 ) = #externalMacro(module: "MCPMacros", type: "MCPCommandMacro")
+
+/// A macro that generates compile-time parameter metadata for an option group struct.
+///
+/// Apply this macro to the struct type used with ``OptionGroup``:
+///
+/// ```swift
+/// @MCPOptionGroup
+/// struct SharedOptions {
+///     @Option(description: "Verbose output")
+///     var verbose: Bool = false
+/// }
+///
+/// @MCPCommand(description: "My command")
+/// struct MyCommand {
+///     @OptionGroup var shared: SharedOptions
+/// }
+/// ```
+///
+/// The macro generates a ``StaticMCPGroup`` conformance with static parameter
+/// metadata and an `mcpApply(arguments:)` method, so the parent ``MCPCommand``
+/// conformance can flatten group parameters at compile time without reflection.
+@attached(extension, conformances: StaticMCPGroup, names: named(mcpParameters), named(mcpApply))
+public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOptionGroupMacro")
 
 /// A macro that generates a `main()` entry point, a `ToolID` enum, and
 /// exhaustive dispatch for an MCP server application.

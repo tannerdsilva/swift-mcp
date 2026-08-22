@@ -29,13 +29,11 @@ import Foundation
 /// }
 /// ```
 ///
-/// - Warning: This class uses ``@unchecked Sendable`` because it holds mutable
-///   state (`wrappedValue`) that is modified via `Mirror` reflection after
-///   initialization. This is safe because each tool instance is used by a
-///   single thread in a create → apply → invoke → discard pattern. Concurrent
-///   access to the same instance is not supported.
+/// - Warning: This wrapper is a value type whose mutable state is a normal
+///   stored property; mutating methods follow value semantics. Each tool
+///   instance is used in a create → apply → invoke → discard pattern.
 @propertyWrapper
-public final class Argument<Value: Codable & Sendable>: MCPParamProtocol, @unchecked Sendable {
+public struct Argument<Value: Codable & Sendable>: MCPParamProtocol {
 
     /// The underlying wrapped value.
     public var wrappedValue: Value
@@ -77,7 +75,7 @@ public final class Argument<Value: Codable & Sendable>: MCPParamProtocol, @unche
     /// - Parameter value: The value to set.
     /// - Throws: ``MCPError/typeMismatch(expected:actual:)`` if the value
     ///   cannot be cast to the expected type.
-    public func _setValue(_ value: Any) throws {
+    public mutating func _setValue(_ value: Any) throws {
         guard let typed = value as? Value else {
             throw MCPError.typeMismatch(
                 expected: _paramTypeName,
@@ -110,13 +108,11 @@ public final class Argument<Value: Codable & Sendable>: MCPParamProtocol, @unche
 /// }
 /// ```
 ///
-/// - Warning: This class uses ``@unchecked Sendable`` because it holds mutable
-///   state (`wrappedValue`) that is modified via `Mirror` reflection after
-///   initialization. This is safe because each tool instance is used by a
-///   single thread in a create → apply → invoke → discard pattern. Concurrent
-///   access to the same instance is not supported.
+/// - Warning: This wrapper is a value type whose mutable state is a normal
+///   stored property; mutating methods follow value semantics. Each tool
+///   instance is used in a create → apply → invoke → discard pattern.
 @propertyWrapper
-public final class Option<Value: Codable & Sendable>: MCPParamProtocol, @unchecked Sendable {
+public struct Option<Value: Codable & Sendable>: MCPParamProtocol {
 
     /// The underlying wrapped value.
     public var wrappedValue: Value
@@ -157,7 +153,7 @@ public final class Option<Value: Codable & Sendable>: MCPParamProtocol, @uncheck
     /// - Parameter value: The value to set.
     /// - Throws: ``MCPError/typeMismatch(expected:actual:)`` if the value
     ///   cannot be cast to the expected type.
-    public func _setValue(_ value: Any) throws {
+    public mutating func _setValue(_ value: Any) throws {
         guard let typed = value as? Value else {
             throw MCPError.typeMismatch(
                 expected: _paramTypeName,
@@ -190,13 +186,11 @@ public final class Option<Value: Codable & Sendable>: MCPParamProtocol, @uncheck
 /// }
 /// ```
 ///
-/// - Warning: This class uses ``@unchecked Sendable`` because it holds mutable
-///   state (`wrappedValue`) that is modified via `Mirror` reflection after
-///   initialization. This is safe because each tool instance is used by a
-///   single thread in a create → apply → invoke → discard pattern. Concurrent
-///   access to the same instance is not supported.
+/// - Warning: This wrapper is a value type whose mutable state is a normal
+///   stored property; mutating methods follow value semantics. Each tool
+///   instance is used in a create → apply → invoke → discard pattern.
 @propertyWrapper
-public final class Flag: MCPParamProtocol, @unchecked Sendable {
+public struct Flag: MCPParamProtocol {
 
     /// The underlying wrapped boolean value.
     public var wrappedValue: Bool
@@ -239,7 +233,7 @@ public final class Flag: MCPParamProtocol, @unchecked Sendable {
     /// - Parameter value: The value to set.
     /// - Throws: ``MCPError/typeMismatch(expected:actual:)`` if the value
     ///   cannot be converted to a boolean.
-    public func _setValue(_ value: Any) throws {
+    public mutating func _setValue(_ value: Any) throws {
         if let bool = value as? Bool {
             self.wrappedValue = bool
         } else if let int = value as? Int {
@@ -297,19 +291,14 @@ public final class Flag: MCPParamProtocol, @unchecked Sendable {
 /// parent's parameter namespace at runtime by both ArgumentParser and the
 /// MCP framework.
 ///
-/// - Warning: This class uses ``@unchecked Sendable`` because it holds mutable
-///   state (`wrappedValue`) that is modified via `Mirror` reflection after
-///   initialization. This is safe because each tool instance is used by a
-///   single thread in a create → apply → invoke → discard pattern. Concurrent
-///   access to the same instance is not supported.
+/// - Warning: This wrapper is a value type whose mutable state is a normal
+///   stored property; mutating methods follow value semantics. Each tool
+///   instance is used in a create → apply → invoke → discard pattern.
 @propertyWrapper
-public final class OptionGroup<Value: Sendable>: GroupParamProtocol, @unchecked Sendable {
+public struct OptionGroup<Value: StaticMCPGroup>: Sendable {
 
     /// The underlying wrapped group struct.
     public var wrappedValue: Value
-
-    /// The wrapped value, exposed for ``GroupParamProtocol`` conformance.
-    public var _groupWrappedValue: Any { wrappedValue }
 
     /// Creates a new option group wrapper.
     ///
@@ -320,18 +309,11 @@ public final class OptionGroup<Value: Sendable>: GroupParamProtocol, @unchecked 
 
     /// Applies arguments to the group's sub-parameters.
     ///
-    /// Uses `Mirror` to discover ``MCPParamProtocol`` conformers within the
-    /// group struct and sets their values from the arguments dictionary.
+    /// Forwards to the macro-generated ``StaticMCPGroup/mcpApply(arguments:)``
+    /// implementation synthesized by ``MCPOptionGroup``.
     ///
     /// - Parameter arguments: A dictionary of argument names to values.
-    public func _groupApply(arguments: [String: Any]) throws {
-        let mirror = Mirror(reflecting: wrappedValue)
-        for child in mirror.children {
-            guard let label = child.label, label.hasPrefix("_") else { continue }
-            let propertyName = String(label.dropFirst())
-            if let param = child.value as? MCPParamProtocol, let value = arguments[propertyName] {
-                try param._setValue(value)
-            }
-        }
+    public mutating func mcpApply(arguments: [String: Any]) throws {
+        try wrappedValue.mcpApply(arguments: arguments)
     }
 }

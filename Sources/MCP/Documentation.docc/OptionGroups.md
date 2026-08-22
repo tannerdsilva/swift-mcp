@@ -47,49 +47,34 @@ struct Print {
 
 ## How It Works
 
-When the macro encounters ``@OptionGroup``:
-
-1. **MCP**: It discovers the group's parameters recursively and flattens them into the tool's parameter list. The JSON Schema includes all parameters from the group as if they were defined directly on the tool.
-
-2. **CLI**: It generates an ``@OptionGroup`` in the ``AsyncParsableCommand`` struct, which ArgumentParser handles natively.
-
-3. **Argument injection**: When ``apply(arguments:)`` is called, the framework creates an instance of the group type, applies arguments to it, and assigns it to the ``@OptionGroup`` property.
-
-## Nested Option Groups
-
-Option groups can contain other option groups:
+Option groups are flattened at **compile time**. Annotate the group struct with ``@MCPOptionGroup``:
 
 ```swift
-struct NetworkOptions {
-    @Option(description: "Hostname")
-    var host: String = "localhost"
+@MCPOptionGroup
+struct PrintOptions {
+    @Option(description: "Number of copies to print")
+    var copies: Int = 1
 
-    @Option(description: "Port")
-    var port: Int = 8080
-}
-
-struct LoggingOptions {
-    @Option(description: "Log level")
-    var level: String = "info"
-
-    @OptionGroup
-    var network: NetworkOptions
-}
-
-struct Service {
-    @OptionGroup
-    var logging: LoggingOptions
-
-    @Argument(description: "Command")
-    var command: String
-
-    func run() throws -> String { ... }
+    @Flag(description: "Enable verbose output")
+    var verbose: Bool = false
 }
 ```
 
+Then, when the ``MCPCommand`` macro processes a tool with an ``@OptionGroup`` property:
+
+1. **MCP**: The macro inlines the group's static metadata (`StaticMCPGroup/mcpParameters`) into the tool's `discoverParameters()`, so the JSON Schema includes all group parameters as if they were declared on the tool.
+
+2. **CLI**: It generates an ``@OptionGroup`` in the ``AsyncParsableCommand`` struct, which ArgumentParser handles natively.
+
+3. **Argument injection**: The generated `apply(arguments:)` forwards to the group's macro-generated `mcpApply(arguments:)`, which sets each present parameter through its property wrapper.
+
+## Nested Option Groups
+
+Option groups are shallow: an ``@MCPOptionGroup`` struct should contain only `@Argument`/`@Option`/`@Flag` properties. Nested `@OptionGroup` properties are rejected with a compiler diagnostic.
+
 ## Protocol Conformance
 
-The group struct must conform to ``GroupParamProtocol``. The ``@OptionGroup`` wrapper automatically provides this conformance.
+The group struct must be annotated with ``@MCPOptionGroup``, which synthesizes a ``StaticMCPGroup`` conformance (static `mcpParameters` metadata plus `mcpApply(arguments:)`). The ``@OptionGroup`` wrapper then flattens it into the parent at compile time.
 
 ## Best Practices
 
