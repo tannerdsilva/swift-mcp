@@ -114,43 +114,20 @@ public struct MCPParameterInfo: Sendable, Equatable, Codable {
 
 /// Protocol that individual parameter property wrappers conform to.
 ///
-/// ``MCPParamProtocol`` defines the interface the framework uses to interact
-/// with tool parameters at runtime. All property wrappers (`@Argument`,
-/// `@Option`, `@Flag`) conform to this protocol as value types.
+/// ``MCPParamProtocol`` defines the runtime accessor the framework uses to
+/// inject argument values into a property wrapper. All wrappers (`@Argument`,
+/// `@Option`, `@Flag`) conform as value types.
 ///
 /// Parameter metadata is emitted at compile time by the ``MCPCommand`` and
-/// ``MCPOptionGroup`` macros via ``MCPTool/discoverParameters()``, so this
-/// protocol only carries the runtime accessors for argument injection.
+/// ``MCPOptionGroup`` macros via ``MCPTool/discoverParameters()``, so the
+/// wrappers carry no descriptive state — only the value.
 protocol MCPParamProtocol: Sendable {
-    /// A human-readable description of this parameter.
-    var _paramDescription: String? { get }
-
-    /// The Swift type name as a string (e.g. "String", "Int").
-    var _paramTypeName: String { get }
-
-    /// Whether this parameter is required.
-    var _paramRequired: Bool { get }
-
-    /// The kind of parameter (argument, option, flag).
-    var _paramKind: MCPParamKind { get }
-
-    /// Whether this parameter has a default value.
-    var _paramHasDefault: Bool { get }
-
-    /// The allowed values for enum-typed parameters, or `nil` if unconstrained.
-    var _paramEnumValues: [String]? { get }
-
     /// Set the wrapped value from an untyped JSON-decoded value.
     ///
     /// - Parameter value: The value to set, as decoded from JSON.
     /// - Throws: ``MCPError/typeMismatch(expected:actual:)`` if the value
     ///   cannot be converted to the expected type.
     mutating func _setValue(_ value: Any) throws
-
-    /// Get the current wrapped value as an `Any` for JSON encoding.
-    ///
-    /// - Returns: The current value of the wrapped property.
-    func _getValue() throws -> Any
 }
 
 // MARK: - MCPToolID

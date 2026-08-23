@@ -58,6 +58,7 @@ struct PropertyInfo {
     let description: String?
     let hasInitializer: Bool
     let enumValues: [String]?
+    let initializerExpr: String?
 }
 
 // MARK: - MCPCommandMacro
@@ -122,11 +123,12 @@ public struct MCPCommandMacro: ExtensionMacro {
             guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
 
             let wrapperKind: WrapperKind? = varDecl.attributes.first { attr in
-                guard let name = attr.as(AttributeSyntax.self)?.attributeName.description else { return false }
+                guard let attrSyntax = attr.as(AttributeSyntax.self) else { return false }
+                let name = trimmed(attrSyntax.attributeName.description)
                 return name == "Argument" || name == "Option" || name == "Flag" || name == "OptionGroup"
             }.flatMap { attr in
-                guard let name = attr.as(AttributeSyntax.self)?.attributeName.description else { return nil }
-                return WrapperKind(rawValue: name)
+                guard let attrSyntax = attr.as(AttributeSyntax.self) else { return nil }
+                return WrapperKind(rawValue: trimmed(attrSyntax.attributeName.description))
             }
 
             guard let kind = wrapperKind else { continue }
@@ -142,6 +144,7 @@ public struct MCPCommandMacro: ExtensionMacro {
                 }
 
                 let hasInitializer = binding.initializer != nil
+                let initializerExpr = binding.initializer?.value.description
 
                 let attr = varDecl.attributes.first { attr in
                     guard let name = attr.as(AttributeSyntax.self)?.attributeName.description else { return false }
@@ -157,7 +160,8 @@ public struct MCPCommandMacro: ExtensionMacro {
                     wrapperKind: kind,
                     description: description,
                     hasInitializer: hasInitializer,
-                    enumValues: enumValues
+                    enumValues: enumValues,
+                    initializerExpr: initializerExpr
                 ))
             }
         }
@@ -234,14 +238,14 @@ public struct MCPCommandMacro: ExtensionMacro {
             case .option:
                 let descAttr = prop.description.map { "description: \"\($0)\"" } ?? ""
                 let wrapperAttr = descAttr.isEmpty ? "@Option" : "@Option(\(descAttr))"
-                let defaultValue = prop.hasInitializer ? "" : " = \(defaultValueForType(prop.type))"
+                let defaultValue = prop.initializerExpr.map { " = \($0)" } ?? " = \(defaultValueForType(prop.type))"
                 memberDeclarations.append("\(wrapperAttr) var \(prop.name): \(prop.type)\(defaultValue)")
                 initArgs.append("\(prop.name): \(prop.name)")
 
             case .flag:
                 let descAttr = prop.description.map { "description: \"\($0)\"" } ?? ""
                 let wrapperAttr = descAttr.isEmpty ? "@Flag" : "@Flag(\(descAttr))"
-                let defaultValue = prop.hasInitializer ? "" : " = false"
+                let defaultValue = prop.initializerExpr.map { " = \($0)" } ?? " = false"
                 memberDeclarations.append("\(wrapperAttr) var \(prop.name): \(prop.type)\(defaultValue)")
                 initArgs.append("\(prop.name): \(prop.name)")
 

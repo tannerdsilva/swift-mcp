@@ -69,6 +69,7 @@ public struct ToolMacro: PeerMacro {
         let type: String
         let hasDefault: Bool
         let isBool: Bool
+        let defaultExpr: String?
     }
 
     static func extractParameters(from funcDecl: FunctionDeclSyntax) -> [ParamInfo] {
@@ -81,12 +82,14 @@ public struct ToolMacro: PeerMacro {
             let typeText = trimmed(param.type.description)
             let isBool = typeText == "Bool"
             let hasDefault = param.defaultValue != nil
+            let defaultExpr = param.defaultValue?.value.description
 
             params.append(ParamInfo(
                 name: paramName,
                 type: typeText,
                 hasDefault: hasDefault,
-                isBool: isBool
+                isBool: isBool,
+                defaultExpr: defaultExpr
             ))
         }
 
@@ -119,13 +122,13 @@ public struct ToolMacro: PeerMacro {
 
             if !param.hasDefault {
                 wrapperKind = "@Argument"
-                defaultValue = defaultValueForType(param.type)
+                defaultValue = " = \(defaultValueForType(param.type))"
             } else if param.isBool {
                 wrapperKind = "@Flag"
-                defaultValue = " = false"
+                defaultValue = " = \(param.defaultExpr ?? "false")"
             } else {
                 wrapperKind = "@Option"
-                defaultValue = defaultValueForType(param.type)
+                defaultValue = " = \(param.defaultExpr ?? defaultValueForType(param.type))"
             }
 
             properties.append("    \(wrapperKind) var \(param.name): \(param.type)\(defaultValue)")
@@ -147,7 +150,8 @@ public struct ToolMacro: PeerMacro {
                 wrapperKind: kind,
                 description: nil,
                 hasInitializer: param.hasDefault,
-                enumValues: nil
+                enumValues: nil,
+                initializerExpr: nil
             )
         }
         let discoveryExpression = generateDiscoveryExpression(properties: propertyInfos)
@@ -161,7 +165,7 @@ public struct ToolMacro: PeerMacro {
         let invokeBody: String
         if isAsync || isThrowing {
             invokeBody = """
-                    let output = try \(awaitPrefix)\(tryPrefix)run()
+                    let output = \(tryPrefix)\(awaitPrefix)run()
                     return .text(String(describing: output))
             """
         } else {

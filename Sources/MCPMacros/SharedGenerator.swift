@@ -37,6 +37,26 @@ func extractEnumValues(from attribute: AttributeSyntax) -> [String]? {
     return nil
 }
 
+// Normalizes a Swift type spelling to the canonical form the framework emits.
+// Mirrors `String(describing: Value.self)` so schemas are stable regardless of
+// whether the user writes shorthand (`[String]`, `Int?`) or long form.
+func normalizedTypeName(_ typeName: String) -> String {
+    let name = trimmed(typeName)
+    if name.hasSuffix("!") || name.hasSuffix("?") {
+        return "Optional<\(normalizedTypeName(String(name.dropLast())))>"
+    }
+    if name.hasPrefix("[") && name.hasSuffix("]") {
+        let inner = String(name.dropFirst().dropLast())
+        if let colon = inner.firstIndex(of: ":") {
+            let key = String(inner[..<colon])
+            let value = String(inner[inner.index(after: colon)...])
+            return "Dictionary<\(normalizedTypeName(key)), \(normalizedTypeName(value))>"
+        }
+        return "Array<\(normalizedTypeName(inner))>"
+    }
+    return name
+}
+
 // Builds the MCPParameterInfo constructor expression for a non-group property.
 // Returns nil for .optionGroup (callers handle those entries separately).
 func parameterInfoExpression(
@@ -66,7 +86,7 @@ func parameterInfoExpression(
         return nil
     }
 
-    let typeNameLiteral = kind == .flag ? "\"Bool\"" : "\"\(escapeStringLiteral(typeName))\""
+    let typeNameLiteral = kind == .flag ? "\"Bool\"" : "\"\(escapeStringLiteral(normalizedTypeName(typeName)))\""
     let descriptionArg = description.map { "description: \"\(escapeStringLiteral($0))\"" } ?? "description: nil"
     let enumArg = enumValues.map { "enumValues: \($0)" } ?? "enumValues: nil"
 

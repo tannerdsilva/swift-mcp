@@ -38,36 +38,17 @@ public struct Argument<Value: Codable & Sendable>: MCPParamProtocol {
     /// The underlying wrapped value.
     public var wrappedValue: Value
 
-    /// A human-readable description of this parameter.
-    public let _paramDescription: String?
-
-    /// The Swift type name as a string.
-    public let _paramTypeName: String
-
-    /// Whether this parameter is required. Always `true` for `@Argument`.
-    public let _paramRequired: Bool = true
-
-    /// The kind of parameter. Always `.argument`.
-    let _paramKind: MCPParamKind = .argument
-
-    /// Whether this parameter has a default value. Always `false` for `@Argument`.
-    public let _paramHasDefault: Bool = false
-
-    /// The allowed values for enum-typed parameters, or `nil` if unconstrained.
-    public let _paramEnumValues: [String]?
-
     /// Creates a new required argument wrapper.
     ///
     /// - Parameters:
     ///   - wrappedValue: The default/placeholder value. Ignored when the
     ///     argument is provided by the caller.
-    ///   - description: A human-readable description of the parameter.
-    ///   - enumValues: Allowed values for enum-typed parameters (e.g. `["debug", "info"]`).
+    ///   - description: A human-readable description of the parameter
+    ///     (consumed at compile time by the macro for schema generation).
+    ///   - enumValues: Allowed values for enum-typed parameters (e.g. `["debug", "info"]`),
+    ///     consumed at compile time by the macro.
     public init(wrappedValue: Value, description: String? = nil, enumValues: [String]? = nil) {
         self.wrappedValue = wrappedValue
-        self._paramDescription = description
-        self._paramTypeName = String(describing: Value.self)
-        self._paramEnumValues = enumValues
     }
 
     /// Sets the wrapped value from an untyped JSON-decoded value.
@@ -78,16 +59,11 @@ public struct Argument<Value: Codable & Sendable>: MCPParamProtocol {
     public mutating func _setValue(_ value: Any) throws {
         guard let typed = value as? Value else {
             throw MCPError.typeMismatch(
-                expected: _paramTypeName,
+                expected: String(describing: Value.self),
                 actual: String(describing: type(of: value))
             )
         }
         self.wrappedValue = typed
-    }
-
-    /// Returns the current wrapped value.
-    public func _getValue() throws -> Any {
-        self.wrappedValue
     }
 }
 
@@ -117,35 +93,16 @@ public struct Option<Value: Codable & Sendable>: MCPParamProtocol {
     /// The underlying wrapped value.
     public var wrappedValue: Value
 
-    /// A human-readable description of this parameter.
-    public let _paramDescription: String?
-
-    /// The Swift type name as a string.
-    public let _paramTypeName: String
-
-    /// Whether this parameter is required. Always `false` for `@Option`.
-    public let _paramRequired: Bool = false
-
-    /// The kind of parameter. Always `.option`.
-    let _paramKind: MCPParamKind = .option
-
-    /// Whether this parameter has a default value. Always `true` for `@Option`.
-    public let _paramHasDefault: Bool = true
-
-    /// The allowed values for enum-typed parameters, or `nil` if unconstrained.
-    public let _paramEnumValues: [String]?
-
     /// Creates a new optional argument wrapper with a default value.
     ///
     /// - Parameters:
     ///   - wrappedValue: The default value when the parameter is not provided.
-    ///   - description: A human-readable description of the parameter.
-    ///   - enumValues: Allowed values for enum-typed parameters (e.g. `["debug", "info"]`).
+    ///   - description: A human-readable description of the parameter
+    ///     (consumed at compile time by the macro for schema generation).
+    ///   - enumValues: Allowed values for enum-typed parameters (e.g. `["debug", "info"]`),
+    ///     consumed at compile time by the macro.
     public init(wrappedValue: Value, description: String? = nil, enumValues: [String]? = nil) {
         self.wrappedValue = wrappedValue
-        self._paramDescription = description
-        self._paramTypeName = String(describing: Value.self)
-        self._paramEnumValues = enumValues
     }
 
     /// Sets the wrapped value from an untyped JSON-decoded value.
@@ -156,16 +113,11 @@ public struct Option<Value: Codable & Sendable>: MCPParamProtocol {
     public mutating func _setValue(_ value: Any) throws {
         guard let typed = value as? Value else {
             throw MCPError.typeMismatch(
-                expected: _paramTypeName,
+                expected: String(describing: Value.self),
                 actual: String(describing: type(of: value))
             )
         }
         self.wrappedValue = typed
-    }
-
-    /// Returns the current wrapped value.
-    public func _getValue() throws -> Any {
-        self.wrappedValue
     }
 }
 
@@ -195,34 +147,16 @@ public struct Flag: MCPParamProtocol {
     /// The underlying wrapped boolean value.
     public var wrappedValue: Bool
 
-    /// A human-readable description of this flag.
-    public let _paramDescription: String?
-
-    /// The Swift type name. Always `"Bool"`.
-    public let _paramTypeName: String = "Bool"
-
-    /// Whether this parameter is required. Always `false` for `@Flag`.
-    public let _paramRequired: Bool = false
-
-    /// The kind of parameter. Always `.flag`.
-    let _paramKind: MCPParamKind = .flag
-
-    /// Whether this parameter has a default value. Always `true` for `@Flag`.
-    public let _paramHasDefault: Bool = true
-
-    /// The allowed values for enum-typed parameters, or `nil` if unconstrained.
-    public let _paramEnumValues: [String]?
-
     /// Creates a new flag wrapper.
     ///
     /// - Parameters:
     ///   - wrappedValue: The default value (typically `false`).
-    ///   - description: A human-readable description of the flag.
-    ///   - enumValues: Allowed values for enum-typed parameters (e.g. `["debug", "info"]`).
+    ///   - description: A human-readable description of the flag
+    ///     (consumed at compile time by the macro for schema generation).
+    ///   - enumValues: Allowed values for enum-typed parameters (e.g. `["debug", "info"]`),
+    ///     consumed at compile time by the macro.
     public init(wrappedValue: Bool = false, description: String? = nil, enumValues: [String]? = nil) {
         self.wrappedValue = wrappedValue
-        self._paramDescription = description
-        self._paramEnumValues = enumValues
     }
 
     /// Sets the wrapped value from an untyped value.
@@ -254,11 +188,6 @@ public struct Flag: MCPParamProtocol {
                 actual: String(describing: type(of: value))
             )
         }
-    }
-
-    /// Returns the current wrapped value.
-    public func _getValue() throws -> Any {
-        self.wrappedValue
     }
 }
 

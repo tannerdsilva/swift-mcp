@@ -100,7 +100,7 @@ public struct MCPApplicationMacro: MemberMacro {
             // Check for @Tool attribute (may be qualified as MCP.Tool)
             let toolAttr = varDecl.attributes.first { attr in
                 guard let attrSyntax = attr.as(AttributeSyntax.self) else { return false }
-                let name = attrSyntax.attributeName.description
+                let name = trimmed(attrSyntax.attributeName.description)
                 return name == "Tool" || name.hasSuffix(".Tool")
             }?.as(AttributeSyntax.self)
 
