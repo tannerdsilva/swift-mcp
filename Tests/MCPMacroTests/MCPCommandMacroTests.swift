@@ -1,4 +1,7 @@
 import Testing
+import SwiftDiagnostics
+import SwiftParser
+import SwiftParserDiagnostics
 import SwiftSyntaxMacroExpansion
 import SwiftSyntaxMacros
 import SwiftSyntaxMacrosGenericTestSupport
@@ -7,6 +10,9 @@ import SwiftSyntaxMacrosGenericTestSupport
 // strict macro-expansion asserts. Under Swift Testing the XCTest-backed
 // default failure handler is a no-op, so every assertion below passes its
 // failureHandler explicitly — otherwise mismatches are silently swallowed.
+// Each assert additionally re-expands independently and gates on:
+//   - zero macro diagnostics from the expansion context
+//   - the emitted source re-parsing with zero syntax diagnostics
 private func assertMCPExpansion(
     _ originalSource: String,
     expandedSource expectedExpandedSource: String,
@@ -21,6 +27,41 @@ private func assertMCPExpansion(
             Issue.record(Comment(stringLiteral: spec.message))
         }
     )
+
+    // independently expand the same source and verify well-formedness.
+    let file = Parser.parse(source: originalSource)
+    let context = BasicMacroExpansionContext()
+    guard let expanded = try? file.expand(macros: macros, in: context) else {
+        Issue.record("expansion raised an error — generated output is not well-formed")
+        return
+    }
+    let expandedText = "\(expanded)"
+    for diagnostic in context.diagnostics {
+        Issue.record("macro emitted diagnostic: \(diagnostic.message)")
+    }
+    let reparsed = Parser.parse(source: expandedText)
+    if reparsed.hasError {
+        Issue.record("generated source does not parse cleanly")
+    }
+}
+
+// Negative-path assert: expanding must either throw or emit a diagnostic.
+// Use for misuse that is supposed to fail loudly.
+private func assertMCPExpansionFails(
+    _ originalSource: String,
+    macros: [String: Macro.Type]
+) {
+    let file = Parser.parse(source: originalSource)
+    let context = BasicMacroExpansionContext()
+    do {
+        let expanded = try file.expand(macros: macros, in: context)
+        let diagnostics = context.diagnostics
+        if diagnostics.isEmpty {
+            Issue.record("expected expansion to fail, but it produced: \(expanded)")
+        }
+    } catch {
+        // thrown misuse — the expected outcome
+    }
 }
 
 // MARK: - MCPCommand Macro Tests
@@ -820,6 +861,8 @@ func toolMacroWithOptions() {
     )
 }
 
+// MARK: - Negative / misuse tests
+
 @Test("Tool generates async struct")
 func toolMacroAsync() {
     assertMCPExpansion(
@@ -870,5 +913,113 @@ func toolMacroAsync() {
         }
         """,
         macros: ["FuncTool": ToolMacro.self]
+    )
+}
+
+@Test("Nested option groups are rejected")
+func nestedOptionGroupRejected() {
+    assertMCPExpansionFails(
+        """
+        struct Inner {
+            @Option var x: Int = 1
+        }
+        @MCPOptionGroup
+        struct Outer {
+            @OptionGroup var inner: Inner
+        }
+        """,
+        macros: ["MCPOptionGroup": MCPOptionGroupMacro.self]
+    )
+}
+
+@Test("MCPCommand on a non-struct is rejected")
+func mcpCommandOnEnumRejected() {
+    assertMCPExpansionFails(
+        """
+        @MCPCommand(description: "Bad")
+        enum BadCommand {
+            case a
+        }
+        """,
+        macros: ["MCPCommand": MCPCommandMacro.self]
+    )
+}
+
+@Test("MCPOptionGroup on a non-struct is rejected")
+func mcpOptionGroupOnClassRejected() {
+    assertMCPExpansionFails(
+        """
+        @MCPOptionGroup
+        class BadGroup {
+            @Option var x: Int = 1
+        }
+        """,
+        macros: ["MCPOptionGroup": MCPOptionGroupMacro.self]
+    )
+}
+
+@Test("FuncTool on a non-function is rejected")
+func funcToolOnNonFunctionRejected() {
+    assertMCPExpansionFails(
+        """
+        @FuncTool(description: "Bad")
+        struct NotAFunction {}
+        """,
+        macros: ["FuncTool": ToolMacro.self]
+    )
+}
+
+// MARK: - Edge-case expansion fixtures
+
+@Test("MCPCommand with no parameters emits empty discovery")
+func mcpCommandEmpty() {
+    assertMCPExpansion(
+        """
+        @MCPCommand(description: "Empty")
+        struct EmptyCommand {
+            func run() -> String { return "x" }
+        }
+        """,
+        expandedSource: """
+        struct EmptyCommand {
+            func run() -> String { return "x" }
+        }
+
+        extension EmptyCommand: MCPTool {
+            public static var configuration: MCPToolConfiguration {
+                MCPToolConfiguration(description: "Empty")
+            }
+
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                []
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                var setParams = Set<String>()
+                    for param in Self.discoverParameters() where param.required {
+                        if !setParams.contains(param.name) {
+                            throw MCPError.missingArgument(param.name)
+                        }
+                    }
+            }
+
+            public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
+                let output = try run()
+                return .text(String(describing: output))
+            }
+            #if canImport(ArgumentParser)
+            struct CLI: AsyncParsableCommand {
+
+
+                mutating func run() throws {
+                    let command = EmptyCommand()
+                    let result = try command.run()
+                    print(result)
+                }
+            }
+            #endif
+        }
+        """,
+        macros: ["MCPCommand": MCPCommandMacro.self]
     )
 }

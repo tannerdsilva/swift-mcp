@@ -109,6 +109,126 @@ struct DynamicEchoTool: MCPTool {
     }
 }
 
+// MARK: - Macro Edge Fixtures (compiled + runtime)
+
+@MCPCommand(description: "Empty command")
+struct EmptyCommand {
+    func run() async throws -> String { "done" }
+}
+
+@MCPCommand(description: "Group-only command")
+struct GroupOnlyCommand {
+    @OptionGroup
+    var options: SharedPrintOptions = SharedPrintOptions()
+
+    func run() async throws -> String { options.verbose ? "v" : "" }
+}
+
+@MCPCommand(description: "Varied types")
+struct VariedTypesCommand {
+    @Argument(description: "A name")
+    var name: String = ""
+
+    @Option(description: "A count")
+    var count: Int = 1
+
+    @Option(description: "A ratio")
+    var ratio: Double = 0.5
+
+    @Flag(description: "Enabled")
+    var enabled: Bool = false
+
+    @Option(description: "Tags")
+    var tags: [String] = []
+
+    @Option(description: "Optional level")
+    var level: String? = nil
+
+    func run() async throws -> String { name }
+}
+
+@MCPApplication(name: "app-server", version: "1.0.0")
+struct AppServer {
+    @Tool var greet = Greet()
+    @Tool var calculate = Calculator()
+}
+
+@Test("MCPCommand with zero parameters advertises none")
+func emptyCommandDefaults() async throws {
+    #expect(EmptyCommand.discoverParameters().isEmpty)
+    var tool = EmptyCommand()
+    try tool.apply(arguments: ["unexpected": "x"])
+    let context = MCPContext(arguments: [:])
+    let result = try await tool.invoke(context: context)
+    #expect(result.isError == false)
+}
+
+@Test("Group-only tool flattens group parameters")
+func groupOnlyToolDiscovery() {
+    let params = GroupOnlyCommand.discoverParameters()
+    #expect(params.count == 2)
+    #expect(params.first { $0.name == "verbose" } != nil)
+    #expect(params.first { $0.name == "copies" } != nil)
+}
+
+@Test("Shorthand types are normalized and mapped in schema")
+func shorthandTypeNormalization() {
+    let params = VariedTypesCommand.discoverParameters()
+
+    let tags = params.first { $0.name == "tags" }
+    #expect(tags?.typeName == "Array<String>")
+
+    let level = params.first { $0.name == "level" }
+    #expect(level?.typeName == "Optional<String>")
+
+    let schema = JSONSchemaBuilder.buildSchema(for: VariedTypesCommand.self)
+    let properties = schema["properties"] as? [String: Any]
+
+    let tagsSchema = properties?["tags"] as? [String: Any]
+    #expect(tagsSchema?["type"] as? String == "array")
+
+    // Optional-typed parameter metadata is emissed; injection of a raw
+    // String into `String?` is intentionally rejected by the wrapper cast.
+    #expect(properties?["level"] != nil)
+}
+
+@Test("Varied-types injection round-trips")
+func variedTypesInjection() async throws {
+    var tool = VariedTypesCommand()
+    try tool.apply(arguments: [
+        "name": "n",
+        "count": 7,
+        "ratio": 1.5,
+        "enabled": true,
+        "tags": ["a", "b"],
+    ])
+    #expect(tool.name == "n")
+    #expect(tool.count == 7)
+    #expect(tool.ratio == 1.5)
+    #expect(tool.enabled == true)
+    #expect(tool.tags == ["a", "b"])
+    #expect(tool.level == nil) // not provided, optional stays nil
+
+    let context = MCPContext(arguments: [:])
+    let result = try await tool.invoke(context: context)
+    #expect(result.isError == false)
+}
+
+@Test("MCPApplication compiles and dispatches through generated callTool")
+func mcpApplicationDispatch() async throws {
+    let app = AppServer()
+    let greetResult = try await app.callTool(.greet, arguments: ["name": "Skeptic"])
+    #expect(greetResult.isError == false)
+    if case .text(let text) = greetResult.content[0] {
+        #expect(text == "Hello, Skeptic!")
+    } else {
+        Issue.record("Expected text content")
+    }
+
+    let calcResult = try await app.callTool(.calculate, arguments: ["a": 4.0, "b": 2.0, "operation": "multiply"])
+    #expect(calcResult.isError == false)
+}
+
 // MARK: - Tool Name Tests
 
 @Test("Tool name is derived from type name")
