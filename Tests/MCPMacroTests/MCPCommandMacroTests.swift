@@ -116,17 +116,6 @@ func mcpCommandWithArgument() {
                 let output = try await run()
                 return .text(String(describing: output))
             }
-            #if canImport(ArgumentParser)
-            struct CLI: AsyncParsableCommand {
-                @Argument(description: "A name") var name: String
-
-                mutating func run() async throws {
-                    let command = TestCommand(name: name)
-                    let result = try await command.run()
-                    print(result)
-                }
-            }
-            #endif
         }
         """,
         macros: ["MCPCommand": MCPCommandMacro.self]
@@ -179,17 +168,6 @@ func mcpCommandWithOption() {
                 let output = try await run()
                 return .text(String(describing: output))
             }
-            #if canImport(ArgumentParser)
-            struct CLI: AsyncParsableCommand {
-                @Option(description: "Count") var count: Int = 1
-
-                mutating func run() async throws {
-                    let command = TestCommand(count: count)
-                    let result = try await command.run()
-                    print(result)
-                }
-            }
-            #endif
         }
         """,
         macros: ["MCPCommand": MCPCommandMacro.self]
@@ -242,17 +220,6 @@ func mcpCommandWithFlag() {
                 let output = try await run()
                 return .text(String(describing: output))
             }
-            #if canImport(ArgumentParser)
-            struct CLI: AsyncParsableCommand {
-                @Flag(description: "Verbose mode") var verbose: Bool = false
-
-                mutating func run() async throws {
-                    let command = TestCommand(verbose: verbose)
-                    let result = try await command.run()
-                    print(result)
-                }
-            }
-            #endif
         }
         """,
         macros: ["MCPCommand": MCPCommandMacro.self]
@@ -305,17 +272,6 @@ func mcpCommandWithName() {
                 let output = try await run()
                 return .text(String(describing: output))
             }
-            #if canImport(ArgumentParser)
-            struct CLI: AsyncParsableCommand {
-                @Argument(description: "A value") var value: String
-
-                mutating func run() async throws {
-                    let command = TestCommand(value: value)
-                    let result = try await command.run()
-                    print(result)
-                }
-            }
-            #endif
         }
         """,
         macros: ["MCPCommand": MCPCommandMacro.self]
@@ -388,19 +344,6 @@ func mcpCommandMixed() {
                 let output = try await run()
                 return .text(String(describing: output))
             }
-            #if canImport(ArgumentParser)
-            struct CLI: AsyncParsableCommand {
-                @Argument(description: "Required input") var input: String
-                        @Option(description: "Optional multiplier") var multiplier: Int = 1
-                        @Flag(description: "Enable verbose output") var verbose: Bool = false
-
-                mutating func run() async throws {
-                    let command = Mixed(input: input, multiplier: multiplier, verbose: verbose)
-                    let result = try await command.run()
-                    print(result)
-                }
-            }
-            #endif
         }
         """,
         macros: ["MCPCommand": MCPCommandMacro.self]
@@ -467,18 +410,6 @@ func mcpCommandWithOptionGroup() {
                 let output = try await run()
                 return .text(String(describing: output))
             }
-            #if canImport(ArgumentParser)
-            struct CLI: AsyncParsableCommand {
-                @Argument(description: "A required value") var value: String
-                        @OptionGroup var shared: SharedOptions
-
-                mutating func run() async throws {
-                    let command = MyCommand(value: value, shared: shared)
-                    let result = try await command.run()
-                    print(result)
-                }
-            }
-            #endif
         }
         """,
         macros: ["MCPCommand": MCPCommandMacro.self]
@@ -531,17 +462,6 @@ func mcpCommandWithEnumValues() {
                 let output = try await run()
                 return .text(String(describing: output))
             }
-            #if canImport(ArgumentParser)
-            struct CLI: AsyncParsableCommand {
-                @Option(description: "Log level") var level: String = "info"
-
-                mutating func run() async throws {
-                    let command = LevelCommand(level: level)
-                    let result = try await command.run()
-                    print(result)
-                }
-            }
-            #endif
         }
         """,
         macros: ["MCPCommand": MCPCommandMacro.self]
@@ -634,7 +554,6 @@ func mcpApplicationToolID() {
                         app.greet
                         app.calculate
                     }
-                _ = app
                 try await server.runService()
             }
         }
@@ -690,7 +609,6 @@ func mcpApplicationDebugTool() {
                         app.greet
                         app.debug
                     }
-                _ = app
                 try await server.runService()
             }
         }
@@ -734,9 +652,64 @@ func mcpApplicationWithAddress() {
                 let server = MCPServer(name: "test", version: "1.0.0", address: .localhostIPv4(port: 8080)) {
                         app.greet
                     }
-                _ = app
                 try await server.runService()
             }
+        }
+        """,
+        macros: ["MCPApplication": MCPApplicationMacro.self]
+    )
+}
+
+@Test("MCPApplication with custom transport")
+func mcpApplicationWithTransport() {
+    assertMCPExpansion(
+        """
+        @MCPApplication(name: "test", version: "1.0.0", transport: MyCustomTransport())
+        struct MyApp {
+            @Tool var greet = Greet()
+        }
+        """,
+        expandedSource: """
+        struct MyApp {
+            @Tool var greet = Greet()
+
+            /// Compile-time unique tool identifiers generated by @MCPApplication.
+            enum MyApp_ToolID: String, MCPToolID {
+                case greet
+            }
+
+            /// Exhaustive dispatch for all registered tools.
+            /// Each tool's concrete type is known in its branch — no type erasure.
+            func callTool(_ id: MyApp_ToolID, arguments: [String: Any]) async throws -> MCPToolResult {
+                switch id {
+                case .greet:
+                        var tool = Greet()
+                        try tool.apply(arguments: arguments)
+                        return try await tool.invoke(context: MCPContext(arguments: arguments))
+                }
+            }
+
+            /// Generated entry point for the MCP server application.
+            static func main() async throws {
+                let app = MyApp()
+                let server = MCPServer(name: "test", version: "1.0.0", transport: MyCustomTransport()) {
+                        app.greet
+                    }
+                try await server.runService()
+            }
+        }
+        """,
+        macros: ["MCPApplication": MCPApplicationMacro.self]
+    )
+}
+
+@Test("MCPApplication rejects address and transport together")
+func mcpApplicationRejectsAddressAndTransport() {
+    assertMCPExpansionFails(
+        """
+        @MCPApplication(name: "test", version: "1.0.0", address: .localhostIPv4(), transport: MyCustomTransport())
+        struct MyApp {
+            @Tool var greet = Greet()
         }
         """,
         macros: ["MCPApplication": MCPApplicationMacro.self]
@@ -1007,17 +980,6 @@ func mcpCommandEmpty() {
                 let output = try run()
                 return .text(String(describing: output))
             }
-            #if canImport(ArgumentParser)
-            struct CLI: AsyncParsableCommand {
-
-
-                mutating func run() throws {
-                    let command = EmptyCommand()
-                    let result = try command.run()
-                    print(result)
-                }
-            }
-            #endif
         }
         """,
         macros: ["MCPCommand": MCPCommandMacro.self]

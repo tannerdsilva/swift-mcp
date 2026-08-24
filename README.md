@@ -1,113 +1,88 @@
 # swift-mcp
 
-**A Swift framework for building MCP (Model Context Protocol) servers with a declarative, property-wrapper-based API inspired by Swift Argument Parser and Hummingbird.**
+**A Swift framework for building MCP (Model Context Protocol) servers with a declarative, property-wrapper-based API.**
 
-[![Swift](https://img.shields.io/badge/Swift-6.0-orange.svg)](https://swift.org)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![MCP](https://img.shields.io/badge/MCP-2025--06--18-purple.svg)](https://modelcontextprotocol.io)
-[![Documentation](https://img.shields.io/badge/Documentation-DocC-blueviolet.svg)](https://swift.org/documentation/docc)
+![Swift](https://img.shields.io/badge/Swift-6.0-orange.svg) ![License](https://img.shields.io/badge/License-MIT-green.svg) ![MCP](https://img.shields.io/badge/MCP-2025--06--18-purple.svg)
 
 ---
 
-> **📖 Documentation:** This project uses [DocC](https://swift.org/documentation/docc) as its primary documentation format. Build the documentation with `swift package --disable-sandbox generate-documentation` or read the articles inline in `Sources/MCP/Documentation.docc/`.
+> **📖 Documentation:** This project uses [DocC](https://swift.org/documentation/docc) as its primary documentation format. The authoritative catalog lives in `Sources/MCP/Documentation.docc/`. Build it with `swift package --disable-sandbox generate-documentation`.
 
 ## Overview
 
-`swift-mcp` lets you define MCP tools using the same familiar syntax as Swift Argument Parser. Write your tool once, and optionally get both an MCP server tool and a CLI command from a single struct declaration.
+`swift-mcp` lets you define MCP tools using property wrappers (`@Argument`, `@Option`, `@Flag`, `@OptionGroup`) and macros (`@MCPCommand`, `@FuncTool`, `@MCPApplication`), then host them with an `MCPServer` run through Swift Service Lifecycle.
 
 ### Quick Start
 
 ```swift
 import MCP
 
-@Tool(description: "Greet someone by name")
-func greet(name: String, count: Int = 1, formal: Bool = false) -> String {
-    let greeting = formal ? "Greetings" : "Hello"
-    return Array(repeating: "\(greeting), \(name)!", count: count)
-        .joined(separator: "\n")
+enum MyTools {
+    @FuncTool(description: "Greet someone by name")
+    static func greet(name: String, count: Int = 1, formal: Bool = false) -> String {
+        let greeting = formal ? "Greetings" : "Hello"
+        return Array(repeating: "\(greeting), \(name)!", count: count)
+            .joined(separator: "\n")
+    }
 }
 
-// Start the server
 let server = MCPServer(name: "demo", version: "1.0.0") {
-    greetTool()
+    MyTools.greetTool()
 }
 try await server.runService()
 ```
 
 ### Features
 
-- **`@Tool` macro** — Generate MCP tools from plain functions with automatic parameter discovery
-- **`@MCPCommand` macro** — Dual-use CLI/MCP tools with Swift Argument Parser integration
-- **`@MCPApplication` macro** — Full server application generation with `@Tool` property wrapper
-- **Property wrappers** — `@Argument`, `@Option`, `@Flag`, `@OptionGroup` for parameter declaration
-- **Automatic JSON Schema** — Tool parameters are automatically described in JSON Schema Draft 7
-- **Compile-time discovery** — Parameters are discovered via macro-generated code, no runtime reflection
-- **Option groups** — Share common parameters across tools with `@OptionGroup`
-- **Stdio transport** — Standard MCP transport for subprocess-based clients
+- **`@MCPCommand` macro** — generate an `MCPTool` conformance from a struct with a `run()` method
+- **`@FuncTool` macro** — generate MCP tools from plain functions
+- **`@MCPApplication` macro** — full server entry point generation with exhaustive, type-preserving dispatch
+- **Property wrappers** — `@Argument`, `@Option`, `@Flag`, `@OptionGroup`
+- **Automatic JSON Schema** — tool parameters are described in JSON Schema Draft 7
+- **Compile-time discovery** — parameters are discovered via macro-generated code, no runtime reflection
+- **Option groups** — share common parameters across tools with `@OptionGroup` + `@MCPOptionGroup`
+- **Stdio transport** — standard MCP transport for subprocess-based clients
 - **TCP transport** — IPv4, IPv6, dual-stack, and Unix domain socket support
-- **Access control** — Per-tool access levels with IP-based resolution
-- **Enum constraints** — Optional `enumValues` parameter for JSON Schema enum constraints
-- **Dynamic registration** — Register and unregister tools at runtime with `register(_:)` and `unregister(_:)`
-- **Structured logging** — `trace`, `debug`, `info`, `warning`, `error` levels via Swift Logging API
-- **Actor-based concurrency** — `TransportMessageHandler` actor for serialized, cancellable message processing
+- **Access control** — per-tool access levels with IP-based resolution
+- **Enum constraints** — optional `enumValues` parameter for JSON Schema enum constraints
+- **Dynamic registration** — register and unregister tools at runtime with `register(_:)` and `unregister(_:)`
+- **Structured logging** — `trace`/`debug`/`info`/`warning`/`error` via Swift Logging
+- **Actor-based concurrency** — `TransportMessageHandler` for serialized, cancellable message processing
 
 ---
 
 ## Table of Contents
 
 - [Installation](#installation)
-- [Usage Guide](#usage-guide)
-  - [Direct MCPTool Conformance](#direct-mcptool-conformance)
-  - [Macro-Based Tools](#macro-based-tools)
-  - [Option Groups](#option-groups)
-  - [Server Setup](#server-setup)
-- [API Reference](#api-reference)
+- [Usage](#usage)
 - [Documentation](#documentation)
 - [Testing](#testing)
 - [License](#license)
 
----
-
 ## Installation
 
-### Swift Package Manager
-
-Add the following to your `Package.swift`:
+Add the package to your `Package.swift`:
 
 ```swift
 dependencies: [
     .package(url: "https://github.com/your-org/swift-mcp.git", from: "1.0.0")
+],
+targets: [
+    .target(
+        name: "MyTool",
+        dependencies: [
+            .product(name: "MCP", package: "swift-mcp"),
+        ]
+    ),
 ]
 ```
 
-Then add `MCP` as a dependency to your target:
+The macro implementation ships with the `MCP` product — no separate macro
+dependency is required.
 
-```swift
-.target(
-    name: "MyTool",
-    dependencies: ["MCP"]
-)
-```
+## Usage
 
-If you want to use the `@MCPCommand` macro with ArgumentParser CLI generation, also add `ArgumentParser`:
-
-```swift
-.target(
-    name: "MyTool",
-    dependencies: [
-        "MCP",
-        .product(name: "ArgumentParser", package: "swift-argument-parser")
-    ]
-)
-```
-
----
-
-## Usage Guide
-
-### Direct MCPTool Conformance
-
-For full control, conform your types directly to `MCPTool`:
+### Direct MCPTool conformance
 
 ```swift
 import MCP
@@ -117,10 +92,10 @@ struct GetWeather: MCPTool {
         description: "Get the current weather for a location"
     )
 
-    @MCPArgument(description: "The city name")
+    @Argument(description: "The city name")
     var city: String = ""
 
-    @MCPOption(description: "Temperature unit (celsius/fahrenheit)")
+    @Option(description: "Temperature unit (celsius/fahrenheit)")
     var unit: String = "celsius"
 
     func invoke(context: MCPContext) async throws -> MCPToolResult {
@@ -129,14 +104,16 @@ struct GetWeather: MCPTool {
 }
 ```
 
-### `@Tool` Macro (Function-Based)
+### `@FuncTool` (function-based)
 
-The simplest way to create an MCP tool: apply `@Tool` to a plain function.
+Apply `@FuncTool` to a function to get an `MCPTool`-conforming struct:
 
 ```swift
-@Tool(description: "Calculate the sum of two numbers")
-func add(a: Double, b: Double) -> String {
-    return "\(a + b)"
+enum MyTools {
+    @FuncTool(description: "Calculate the sum of two numbers")
+    static func add(a: Double, b: Double) -> String {
+        "\(a + b)"
+    }
 }
 
 // Parameters without defaults → @Argument (required)
@@ -144,21 +121,21 @@ func add(a: Double, b: Double) -> String {
 // Bool parameters with default false → @Flag
 
 let server = MCPServer(name: "calc", version: "1.0.0") {
-    addTool()
+    MyTools.addTool()
 }
 try await server.runService()
 ```
 
-The generated struct is named `{FunctionName}Tool` (e.g., `addTool`). It conforms to `MCPTool` automatically.
+The generated struct is named `{FunctionName}Tool` (e.g. `addTool`). Because
+`@FuncTool` is a peer macro, the annotated function must be nested inside a
+type, and it works best with `String`-returning functions — see the
+[Macro Guide](Sources/MCP/Documentation.docc/MacroGuide.md).
 
-### Macro-Based Tools (Struct-Based)
+### `@MCPCommand` (struct-based)
 
-Use `@MCPCommand` to generate both MCP and CLI conformances from a single struct:
+Use `@MCPCommand` to generate an `MCPTool` conformance from a struct:
 
 ```swift
-import ArgumentParser  // Required for CLI generation
-import MCP
-
 @MCPCommand(description: "Calculate")
 struct Calculate {
     @Argument(description: "First number")
@@ -184,18 +161,15 @@ struct Calculate {
     }
 }
 
-// As an MCP tool:
 let server = MCPServer(name: "calc", version: "1.0.0") { Calculate() }
-
-// As a CLI command:
-// Calculate.CLI.main()
 ```
 
-### Option Groups
+### Option groups
 
 Share common parameters across tools:
 
 ```swift
+@MCPOptionGroup
 struct SharedOptions {
     @Option(description: "Enable verbose output")
     var verbose: Bool = false
@@ -218,16 +192,14 @@ struct ProcessData {
 }
 ```
 
-### Server Setup
+### Server setup
 
 ```swift
-import MCP
-
 // Imperative registration
 let server = MCPServer(name: "myserver", version: "1.0.0")
 server.register(GetWeather())
 server.register(Greet())
-try await server.run()
+try await server.runService()
 
 // Declarative registration with result builder
 let server = MCPServer(name: "myserver", version: "1.0.0") {
@@ -235,93 +207,58 @@ let server = MCPServer(name: "myserver", version: "1.0.0") {
     Greet()
     Calculate()
 }
-try await server.run()
+try await server.runService()
 
 // Dynamic registration and unregistration
 server.register(GetWeather())
-server.unregister("get_weather")  // Remove a tool at runtime
+server.unregister("getWeather")  // Remove a tool at runtime
+
+// TCP binding
+let server = MCPServer(name: "myserver", version: "1.0.0",
+    address: .localhostIPv4(port: 8080)) {
+    GetWeather()
+}
 ```
 
----
+### Full application entry point
 
-## API Reference
-
-### Core Protocols
-
-| Protocol | Description |
-|---|---|
-| `MCPTool` | The main protocol for defining MCP tools |
-| `MCPParamProtocol` | Protocol for parameter property wrappers |
-| `StaticMCPGroup` | Macro-generated metadata protocol for option-group structs |
-| `MCPTransport` | Protocol for transport layer abstraction |
-
-### Property Wrappers (Framework-Level)
-
-| Wrapper | Maps To | Required | Has Default | Enum Support |
-|---|---|---|---|---|
-| `@MCPArgument` | `@Argument` | Yes | No | `enumValues:` |
-| `@MCPOption` | `@Option` | No | Yes | `enumValues:` |
-| `@MCPFlag` | `@Flag` | No | Yes (false) | — |
-| `@MCPOptionGroup` | `@OptionGroup` | — | — | — |
-
-### Property Wrappers (Dual-Use, with `@MCPCommand`)
-
-| Wrapper | ArgumentParser | MCP |
-|---|---|---|
-| `@Argument` | `@Argument` | `@MCPArgument` |
-| `@Option` | `@Option` | `@MCPOption` |
-| `@Flag` | `@Flag` | `@MCPFlag` |
-| `@OptionGroup` | `@OptionGroup` | `@MCPOptionGroup` |
-
-### Key Types
-
-| Type | Description |
-|---|---|
-| `MCPServer` | Main server class for hosting tools |
-| `MCPToolConfiguration` | Tool metadata (description, name) |
-| `MCPToolResult` | Result of a tool invocation |
-| `MCPContent` | Content block (text, image, resource) |
-| `MCPParameterInfo` | Metadata for a single parameter |
-| `MCPContext` | Contextual information for tool invocation |
-| `MCPError` | Error type for the framework |
-| `AnyCodable` | Type-erased Codable wrapper |
-| `JSONSchemaBuilder` | JSON Schema generation from parameter metadata |
-| `StdioTransport` | Standard I/O transport for MCP |
-| `TCPTransport` | TCP transport with IPv4/IPv6/Unix socket support |
-| `ServerAddress` | Address configuration (IPv4, IPv6, dual-stack, Unix socket) |
-| `TransportMessageHandler` | Actor for serialized, cancellable message processing |
-| `MCPToolBuilder` | Result builder for declarative tool registration |
-
----
+```swift
+@main
+@MCPApplication(name: "myserver", version: "1.0.0", address: .localhostIPv4(port: 8080))
+struct MyApp {
+    @Tool var weather = GetWeather()
+    @Tool var greet = Greet()
+}
+```
 
 ## Documentation
 
-Comprehensive documentation is available in the `Documentation/` directory:
+The [DocC catalog](Sources/MCP/Documentation.docc/) contains the full guide set:
 
-- **[Getting Started](Documentation/GettingStarted.md)** — First steps with swift-mcp
-- **[Tool Definition Guide](Documentation/ToolDefinition.md)** — Defining tools with property wrappers
-- **[Macro Guide](Documentation/MacroGuide.md)** — Using `@MCPCommand` for dual-use tools
-- **[Option Groups](Documentation/OptionGroups.md)** — Sharing parameters across tools
-- **[Server Configuration](Documentation/ServerConfiguration.md)** — Server setup and transport options
-- **[MCP Protocol](Documentation/MCPProtocol.md)** — Supported protocol methods and message flow
-- **[Architecture](Documentation/Architecture.md)** — Framework architecture and design decisions
-- **[Migration Guide](Documentation/MigrationGuide.md)** — Upgrading from earlier versions
+- **Getting Started** — first steps with swift-mcp
+- **Tool Definition** — defining tools with property wrappers and macros
+- **Macro Guide** — `@MCPCommand`, `@FuncTool`, `@MCPOptionGroup`, `@MCPApplication`
+- **Option Groups** — sharing parameters across tools
+- **Server Configuration** — transports, addresses, lifecycle, logging
+- **MCP Protocol** — supported protocol methods and message flow
+- **Transport Design** — stdio/TCP transports and custom transports
+- **Access Control** — the access-level model and IP-based resolution
+- **Lifecycle Management** — Swift Service Lifecycle integration
+- **Architecture** — framework architecture and design decisions
+- **Migration Guide** — upgrading between versions
 
 ### Examples
 
-A family of comprehensive, working examples is available in `Documentation/Examples/`:
+A family of comprehensive, working examples lives in
+[`Sources/MCP/Documentation.docc/Examples/`](Sources/MCP/Documentation.docc/Examples/):
 
 | Article | Covers |
 |---|---|
-| [BasicTools](Documentation/Examples/BasicTools.md) | Sync/async, return types, error handling, all parameter types |
-| [ServerConfiguration](Documentation/Examples/ServerConfiguration.md) | Stdio, TCP (IPv4/IPv6/dual-stack), Unix sockets, ServiceGroup |
-| [AdvancedTools](Documentation/Examples/AdvancedTools.md) | Option groups, access control, complex types, composition |
-| [IntegrationPatterns](Documentation/Examples/IntegrationPatterns.md) | Hummingbird, Vapor, clients, testing, Docker, systemd |
-| [RealWorldScenarios](Documentation/Examples/RealWorldScenarios.md) | File server, DB proxy, AI assistant, build system, monitor, config, notifications |
-
-Each example is self-contained and ready to copy into your project.
-
----
+| [BasicTools](Sources/MCP/Documentation.docc/Examples/BasicTools.md) | Sync/async, return types, error handling, all parameter types |
+| [Example: Server Configuration](Sources/MCP/Documentation.docc/Examples/ExampleServerConfiguration.md) | Stdio, TCP (IPv4/IPv6/dual-stack), Unix sockets, ServiceGroup |
+| [AdvancedTools](Sources/MCP/Documentation.docc/Examples/AdvancedTools.md) | Option groups, access control, complex types, composition |
+| [IntegrationPatterns](Sources/MCP/Documentation.docc/Examples/IntegrationPatterns.md) | Hummingbird, Vapor, clients, testing, Docker, systemd |
+| [RealWorldScenarios](Sources/MCP/Documentation.docc/Examples/RealWorldScenarios.md) | File server, DB proxy, AI assistant, build system, monitor, config |
 
 ## Testing
 
@@ -329,20 +266,19 @@ Each example is self-contained and ready to copy into your project.
 swift test
 ```
 
-The test suite covers:
+The suite covers:
+
 - Tool parameter discovery and argument injection
 - JSON Schema generation
 - Error handling (missing arguments, type mismatches)
 - Option group flattening and argument application
-- Macro expansion for all wrapper types
+- Macro expansion for all wrapper types and macros
 - Server message handling (initialize, tools/list, tools/call, ping, notifications)
 - Transport message actor (ordering, cancellation)
-- MCPApplication macro (ToolID enum, debug-only tools, address binding)
+- `@MCPApplication` macro (ToolID enum, debug-only tools, address and transport binding)
 - Dynamic tool registration and unregistration
 - Enum value constraints in JSON Schema
 
----
-
 ## License
 
-This project is licensed under the Apache License, Version 2.0. See [LICENSE.txt](LICENSE.txt) for details.
+This project is licensed under the MIT License. See [LICENSE.txt](LICENSE.txt) for details.

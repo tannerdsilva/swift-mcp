@@ -3,7 +3,7 @@
 // This source file is part of the MCP open source project
 //
 // Copyright (c) 2024 and the MCP project authors
-// Licensed under Apache License v2.0
+// Licensed under the MIT License
 //
 // See LICENSE.txt for license information
 //
@@ -18,7 +18,10 @@ import NIOPosix
 /// A channel handler that reads newline-delimited JSON messages from a TCP
 /// connection and forwards them to the MCP message handler via an actor for
 /// serialized processing.
-final class MCPMessageHandler: ChannelInboundHandler {
+///
+/// - Note: marked `Sendable` because NIO's `childChannelInitializer` closure
+///   is `@Sendable`; all mutable state stays on the event loop.
+final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = ByteBuffer
 
     private let handler: @Sendable (Data, MCPCallerInfo) async throws -> Data?
@@ -218,7 +221,6 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
         }
 
         self.channel = channel
-        let localAddress = channel.localAddress?.description ?? "unknown"
 
         // Wait for the channel to close (server shutdown)
         try await channel.closeFuture.get()

@@ -6,6 +6,29 @@ How to migrate from earlier versions of swift-mcp.
 
 This guide covers breaking changes between versions and how to update your code.
 
+## Upgrading to 1.1.0
+
+### Dual-Use CLI Code Generation Removed
+
+Earlier versions of ``MCPCommand`` generated a nested `CLI` struct conforming
+to `AsyncParsableCommand` behind an `#if canImport(ArgumentParser)` guard.
+That path was dropped because the generated code could never compile: the MCP
+wrapper names collide with ArgumentParser's, and the MCP library does not
+depend on ArgumentParser.
+
+**What changed**: ``MCPCommand`` now generates only the ``MCPTool``
+conformance. Remove any `import ArgumentParser` and references to
+`YourType.CLI`.
+
+**If you need a CLI**: declare the command's argument surface as its own
+`AsyncParsableCommand` struct and share the underlying logic with your
+``MCPTool`` implementation — the MCP wrappers and ArgumentParser wrappers are
+independent types and are not interchangeable.
+
+### Everything Else Unchanged
+
+All other APIs from 1.0.0 are unchanged in 1.1.0.
+
 ## Migrating to 1.0.0
 
 ### @Param Replaced by @Argument, @Option, @Flag

@@ -3,7 +3,7 @@
 // This source file is part of the MCP open source project
 //
 // Copyright (c) 2024 and the MCP project authors
-// Licensed under Apache License v2.0
+// Licensed under the MIT License
 //
 // See LICENSE.txt for license information
 //
@@ -11,14 +11,14 @@
 
 /// The kind of an MCP tool parameter.
 ///
-/// This enum classifies parameters into three categories that mirror the
-/// Swift Argument Parser's parameter types:
+/// This enum classifies parameters into three categories:
 ///
-/// - ``argument``: A required positional or named parameter. The caller must
-///   provide a value. Maps to `@Argument`.
+/// - ``argument``: A required named parameter. The caller must provide a
+///   value. Maps to the ``Argument`` wrapper.
 /// - ``option``: An optional parameter with a default value. The caller can
-///   omit it. Maps to `@Option`.
-/// - ``flag``: A boolean flag that defaults to `false`. Maps to `@Flag`.
+///   omit it. Maps to the ``Option`` wrapper.
+/// - ``flag``: A boolean flag that defaults to `false`. Maps to the ``Flag``
+///   wrapper.
 public enum MCPParamKind: String, Sendable, Equatable, Codable {
     /// A required positional/named parameter.
     case argument

@@ -1,8 +1,11 @@
 # Examples
 
-This article links to the comprehensive example family in `Documentation/Examples/`.
-Each article contains self-contained, working code samples for every aspect of
-the swift-mcp framework.
+This article links to a family of comprehensive, self-contained example
+articles covering every aspect of the swift-mcp framework. Each example can be
+copied directly into your project.
+
+> The example articles live in this catalog under `Examples/` and are rendered
+> by DocC alongside the rest of the documentation.
 
 ## Article Index
 
@@ -10,7 +13,7 @@ the swift-mcp framework.
 |---|---|
 | @Links(visualStyle: detailedGrid) {
     - <doc:BasicTools>
-    - <doc:ServerConfiguration>
+    - <doc:ExampleServerConfiguration>
     - <doc:AdvancedTools>
     - <doc:IntegrationPatterns>
     - <doc:RealWorldScenarios>

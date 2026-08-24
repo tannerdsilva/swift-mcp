@@ -3,7 +3,7 @@
 // This source file is part of the MCP open source project
 //
 // Copyright (c) 2024 and the MCP project authors
-// Licensed under Apache License v2.0
+// Licensed under the MIT License
 //
 // See LICENSE.txt for license information
 //
@@ -13,9 +13,10 @@ import Foundation
 
 // MARK: - @Argument
 
-/// A required parameter for a dual CLI/MCP command.
+/// A required parameter for an MCP tool.
 ///
-/// Use with the ``MCPCommand`` macro. Maps to `@Argument` in ArgumentParser.
+/// Use with the ``MCPCommand`` macro or in a type that conforms directly
+/// to ``MCPTool``.
 ///
 /// Parameters marked with `@Argument` are required and must be provided by
 /// the caller. The initial value is a placeholder and is ignored when the
@@ -69,9 +70,10 @@ public struct Argument<Value: Codable & Sendable>: MCPParamProtocol {
 
 // MARK: - @Option
 
-/// An optional parameter with a default value for a dual CLI/MCP command.
+/// An optional parameter with a default value for an MCP tool.
 ///
-/// Use with the ``MCPCommand`` macro. Maps to `@Option` in ArgumentParser.
+/// Use with the ``MCPCommand`` macro or in a type that conforms directly
+/// to ``MCPTool``.
 ///
 /// Parameters marked with `@Option` are optional. The initial value is used
 /// as the default when the caller does not provide a value.
@@ -123,9 +125,10 @@ public struct Option<Value: Codable & Sendable>: MCPParamProtocol {
 
 // MARK: - @Flag
 
-/// A boolean flag for a dual CLI/MCP command.
+/// A boolean flag for an MCP tool.
 ///
-/// Use with the ``MCPCommand`` macro. Maps to `@Flag` in ArgumentParser.
+/// Use with the ``MCPCommand`` macro or in a type that conforms directly
+/// to ``MCPTool``.
 ///
 /// Flags are boolean parameters that default to `false`. They are set to
 /// `true` when the flag is present in the caller's arguments.
@@ -193,11 +196,12 @@ public struct Flag: MCPParamProtocol {
 
 // MARK: - @OptionGroup
 
-/// A container that flattens a group of parameters into the parent command.
+/// A container that flattens a group of parameters into the parent tool.
 ///
-/// Use with the ``MCPCommand`` macro. Maps to `@OptionGroup` in ArgumentParser.
-/// The group struct should use ``Argument``, ``Option``, and ``Flag`` wrappers
-/// for its properties; they are flattened into the parent's parameter namespace.
+/// Use with the ``MCPCommand`` macro or in a type that conforms directly
+/// to ``MCPTool``. The group struct should use ``Argument``, ``Option``, and
+/// ``Flag`` wrappers for its properties; they are flattened into the parent's
+/// parameter namespace.
 ///
 /// ```swift
 /// struct SharedOptions {
@@ -217,8 +221,7 @@ public struct Flag: MCPParamProtocol {
 /// ```
 ///
 /// The group's parameters (`verbose`, `outputPath`) are flattened into the
-/// parent's parameter namespace at runtime by both ArgumentParser and the
-/// MCP framework.
+/// parent's parameter namespace at compile time by the ``MCPCommand`` macro.
 ///
 /// - Warning: This wrapper is a value type whose mutable state is a normal
 ///   stored property; mutating methods follow value semantics. Each tool

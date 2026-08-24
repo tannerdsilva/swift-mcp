@@ -1,104 +1,181 @@
 # Architecture
 
-The design philosophy, layering, and key architectural decisions behind swift-mcp.
+This document describes the architecture and key design decisions of swift-mcp.
 
 ## Overview
 
-swift-mcp follows a layered architecture inspired by Swift Argument Parser and Hummingbird. Each layer builds on the one below it, with clear separation of concerns.
-
-## Layers
-
-### Layer 0: Core Protocols
-
-The foundation of the framework. ``MCPTool`` defines the interface every tool must conform to. ``MCPTransport`` abstracts the communication channel. ``MCPError`` provides structured error handling.
+swift-mcp is organized into layers:
 
 ```
-MCPTool          — Tool interface (invoke, apply, configuration)
-MCPTransport     — Communication channel (start, stop)
-MCPError         — Structured errors
-MCPContext       — Invocation context (arguments, caller info)
+┌─────────────────────────────────────────────┐
+│                 MCPServer                    │
+│  (request routing, tool dispatch, JSON-RPC)  │
+├─────────────────────────────────────────────┤
+│               MCPTool Protocol               │
+│  (tool definition, parameter discovery)      │
+├─────────────────────────────────────────────┤
+│          Property Wrappers Layer             │
+│  (@Argument, @Option, @Flag, @OptionGroup)   │
+├─────────────────────────────────────────────┤
+│          JSONSchemaBuilder                   │
+│  (Swift types → JSON Schema Draft 7)         │
+├─────────────────────────────────────────────┤
+│          Transport Layer                     │
+│  (MCPTransport, StdioTransport, TCPTransport)│
+├─────────────────────────────────────────────┤
+│          Protocol Layer                      │
+│  (JSON-RPC types, MCP protocol messages)     │
+└─────────────────────────────────────────────┘
 ```
 
-### Layer 1: Property Wrappers
+## Core Design Decisions
 
-Dual-use property wrappers that work with both Swift Argument Parser and the MCP framework. Each wrapper stores its metadata and provides it to both systems.
+### Property wrappers are value types
 
+All property wrappers (`@Argument`, `@Option`, `@Flag`, `@OptionGroup`) are
+implemented as **structs** (value types) conforming to ``MCPParamProtocol``.
+Option-group structs gain a ``StaticMCPGroup`` conformance synthesized by
+``MCPOptionGroup``. No `AnyObject` constraint and no `@unchecked Sendable`
+are needed.
+
+**Why**: parameter discovery and argument injection are generated at compile
+time by the macros, so the framework never reflects on wrapper instances at
+runtime. Value types keep the wrappers simple and give `Sendable` conformance
+for free.
+
+### Compile-time parameter discovery
+
+Parameter discovery is generated at compile time by the ``MCPCommand`` /
+``FuncTool`` macros — no reflection, no manual registration.
+
+**How it works**:
+
+1. The macro parses the struct's member declarations with SwiftSyntax.
+2. Each property wrapped in `@Argument` / `@Option` / `@Flag` becomes an
+   ``MCPParameterInfo`` entry in a statically-typed `discoverParameters()`.
+3. Each `@OptionGroup` property is flattened into the parent's parameter list
+   using the group's generated metadata.
+4. `apply(arguments:)` is generated with direct `_setValue(_:)` calls.
+
+### Option-group macro
+
+``MCPOptionGroup`` attaches to an option-group struct and generates its
+flattened parameter metadata plus an `mcpApply(arguments:)` method on the
+group type itself:
+
+```swift
+@MCPOptionGroup
+struct SharedOptions {
+    @Option(description: "Verbose output") var verbose: Bool = false
+    @Option(description: "Output path")    var outputPath: String = "."
+}
 ```
-@Argument  → @Argument  (required positional parameter)
-@Option    → @Option    (optional named parameter with default)
-@Flag      → @Flag      (boolean flag, defaults to false)
-@OptionGroup → @OptionGroup (nested parameter group)
-```
 
-### Layer 2: Macro System
+**Why**: generating the group's metadata and apply logic at compile time lets
+the parent ``MCPCommand`` macro inline the group's parameters without runtime
+reflection, and the group stays a plain value type.
 
-The ``MCPCommand`` macro reads property wrapper annotations and generates:
+### One wrapper set
 
-- ``MCPTool`` conformance with ``invoke(context:)`` that calls the user's ``run()``
-- An optional ``AsyncParsableCommand``-conforming CLI struct
-- ``MCPToolConfiguration`` with metadata and access level
+The project has a **single set** of property wrappers — `@Argument`, `@Option`,
+`@Flag`, `@OptionGroup` — used both with direct ``MCPTool`` conformance and
+with the ``MCPCommand`` macro. Option-group structs gain a ``StaticMCPGroup``
+conformance from ``MCPOptionGroup``, so the macros generate identical code for
+either usage.
 
-The ``MCPApplication`` macro generates:
+### Macro architecture
 
-- A ``MCPToolID`` enum for compile-time unique tool names
-- Exhaustive switch dispatch preserving concrete tool types
-- A ``main()`` entry point with ``ServiceGroup``
+``MCPCommand`` is an ``@attached(extension, conformances: MCPTool)`` macro. It:
 
-### Layer 3: Server
+1. Parses the struct's member declarations using SwiftSyntax.
+2. Identifies `@Argument`, `@Option`, `@Flag`, and `@OptionGroup` wrapped
+   properties.
+3. Generates an extension with ``MCPTool`` conformance — including static
+   `discoverParameters()` and `apply(arguments:)`.
 
-``MCPServer`` ties everything together:
+``MCPApplication`` is a ``@attached(member)`` macro. It:
 
-- Accepts tool registrations
-- Manages transport I/O
-- Routes JSON-RPC messages
-- Filters tools by access level
-- Conforms to the ``Service`` protocol for lifecycle management
+1. Reads all `@Tool` property values.
+2. Generates a ``MCPToolID``-conforming enum with one case per tool.
+3. Generates an exhaustive `callTool(_:arguments:)` dispatch switch that
+   preserves each tool's concrete type.
+4. Generates a `static func main()` that builds an ``MCPServer``, registers
+   every `@Tool`, and runs it via ``MCPServer/runService()``.
 
-### Layer 4: Application
+The macro implementation lives in the separate `MCPMacros` target, which the
+`MCP` library target depends on. This keeps SwiftSyntax out of the runtime
+dependency graph while letting consumers use the macros through the `MCP`
+product alone.
 
-The user's application code. Uses macros to define tools, creates a server, and runs it via ``ServiceGroup``.
+### Transport abstraction
+
+The ``MCPTransport`` protocol abstracts the communication channel. The default
+``StdioTransport`` reads newline-delimited JSON from stdin and writes to
+stdout. ``TCPTransport`` binds to IPv4, IPv6, dual-stack, or Unix domain socket
+addresses. Custom transports (HTTP+SSE, WebSocket, etc.) can be implemented by
+conforming to the protocol and injecting them via
+``MCPServer/init(name:version:transport:tools:)``.
+
+### Compile-time uniqueness and dispatch
+
+Tool names are unique at compile time when using ``MCPApplication`` (the
+``ToolID`` enum), and dispatch is an exhaustive switch with the concrete tool
+type in each branch — no `any MCPTool` erasure on the dispatch path.
+
+### ServiceLifecycle integration
+
+``MCPServer`` conforms to the `Service` protocol from `swift-service-lifecycle`.
+The `run()` method creates a ``ServiceGroup`` with the transport wrapped as a
+`ClosureService`. The ``MCPServer/runService(gracefulShutdownSignals:)``
+convenience method adds signal-based graceful shutdown (SIGTERM/SIGINT).
+
+This follows the same pattern as Hummingbird 2.x, ensuring clean startup and
+shutdown sequences, proper resource cleanup, and composability with other
+services in the same ``ServiceGroup``.
 
 ## Data Flow
 
+### Tool invocation
+
 ```
-JSON-RPC Request
-  → Transport (reads bytes, resolves caller info)
-    → Server.handleMessage (routes by method)
-      → tools/list: filter by access level, build schema
-      → tools/call: check access, create tool, apply args, invoke
-        → MCPTool.invoke(context:)
-          → User's run() method
-    ← Response (or error)
-  ← Transport (writes bytes)
+Client                    Server                    Tool
+  │                         │                        │
+  │── tools/call ──────────>│                        │
+  │                         │── tool.init() ────────>│
+  │                         │── tool.apply(args) ───>│
+  │                         │── tool.invoke(ctx) ───>│
+  │                         │<── MCPToolResult ──────│
+  │<── JSON-RPC response ───│                        │
 ```
 
-## Key Design Decisions
+### Parameter discovery (compile time)
 
-### Why Service Lifecycle?
-
-Swift Service Lifecycle provides signal-based graceful shutdown, service dependency ordering, and structured concurrency. By making ``MCPServer`` conform to ``Service``, we get all of this for free. There is no other way to launch the server.
-
-### Why Separate Argument/Option/Flag?
-
-Separate wrappers provide clearer semantics than a single ``@Param`` wrapper. Each wrapper has a distinct behavior:
-
-- ``@Argument`` — required, positional, must be provided by the caller
-- ``@Option`` — optional, named, has a default value
-- ``@Flag`` — boolean, toggles a feature on/off
-
-This 1:1 mapping with ArgumentParser makes the dual-use design transparent.
-
-### Why Access Levels on Tools?
-
-Access control is a first-class concern for MCP servers that operate on a network. By making ``requiredAccess`` a property of ``MCPToolConfiguration``, every tool declares its security requirements at the point of definition. The server enforces them automatically.
-
-### Why No Dynamic Tool Loading?
-
-Compile-time guarantees are prioritized over runtime flexibility. The ``MCPApplication`` macro generates exhaustive dispatch with concrete types — no ``any MCPTool`` erasure. Dynamic loading is possible via ``DynamicMCPServer`` for the rare cases that need it.
+```
+             source struct (read by SwiftSyntax)
+@MCPCommand struct Greet
+         │
+         ├── parser reads member declarations
+         │      ├── @Argument _name
+         │      ├── @Option   _count
+         │      └── @OptionGroup _shared: SharedOptions
+         │              └── @MCPOptionGroup flattens group metadata
+         │                    ├── _verbose → MCPParameterInfo
+         │                    └── _path    → MCPParameterInfo
+         │
+         ├── generates discoverParameters() → [MCPParameterInfo]
+         │      ├── name, count
+         │      └── verbose, path (flattened from SharedOptions metadata)
+         │
+         └── generates apply(arguments:)
+                ├── arguments["name"]  → _name._setValue(...)
+                ├── arguments["count"] → _count._setValue(...)
+                └── arguments["verbose"] → SharedOptions.mcpApply(arguments)
+```
 
 ## Related Articles
 
-- <doc:TransportDesign>
 - <doc:MacroGuide>
+- <doc:ToolDefinition>
+- <doc:MCPProtocol>
+- <doc:TransportDesign>
 - <doc:LifecycleManagement>
-- <doc:AccessControl>

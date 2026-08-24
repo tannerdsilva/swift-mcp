@@ -41,6 +41,7 @@ let package = Package(
         .target(
             name: "MCP",
             dependencies: [
+                .target(name: "MCPMacros"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "NIO", package: "swift-nio"),
                 .product(name: "NIOCore", package: "swift-nio"),

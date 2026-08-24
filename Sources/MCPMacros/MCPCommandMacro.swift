@@ -208,78 +208,13 @@ public struct MCPCommandMacro: ExtensionMacro {
             }
             """
 
-        let cliStruct = buildCLIStruct(structName: structName, properties: properties, isAsyncRun: isAsyncRun)
-
         let source: DeclSyntax = """
         extension \(raw: structName): MCPTool {
         \(raw: mcpMembers)
-        \(raw: cliStruct)
         }
         """
 
         return source.cast(ExtensionDeclSyntax.self)
-    }
-
-    // MARK: - CLI Struct
-
-    static func buildCLIStruct(structName: String, properties: [PropertyInfo], isAsyncRun: Bool) -> String {
-        var memberDeclarations: [String] = []
-        var initArgs: [String] = []
-
-        for prop in properties {
-            switch prop.wrapperKind {
-            case .argument:
-                let descAttr = prop.description.map { "description: \"\($0)\"" } ?? ""
-                let wrapperAttr = descAttr.isEmpty ? "@Argument" : "@Argument(\(descAttr))"
-                let defaultValue = prop.hasInitializer ? "" : " = \(defaultValueForType(prop.type))"
-                memberDeclarations.append("\(wrapperAttr) var \(prop.name): \(prop.type)\(defaultValue)")
-                initArgs.append("\(prop.name): \(prop.name)")
-
-            case .option:
-                let descAttr = prop.description.map { "description: \"\($0)\"" } ?? ""
-                let wrapperAttr = descAttr.isEmpty ? "@Option" : "@Option(\(descAttr))"
-                let defaultValue = prop.initializerExpr.map { " = \($0)" } ?? " = \(defaultValueForType(prop.type))"
-                memberDeclarations.append("\(wrapperAttr) var \(prop.name): \(prop.type)\(defaultValue)")
-                initArgs.append("\(prop.name): \(prop.name)")
-
-            case .flag:
-                let descAttr = prop.description.map { "description: \"\($0)\"" } ?? ""
-                let wrapperAttr = descAttr.isEmpty ? "@Flag" : "@Flag(\(descAttr))"
-                let defaultValue = prop.initializerExpr.map { " = \($0)" } ?? " = false"
-                memberDeclarations.append("\(wrapperAttr) var \(prop.name): \(prop.type)\(defaultValue)")
-                initArgs.append("\(prop.name): \(prop.name)")
-
-            case .optionGroup:
-                memberDeclarations.append("@OptionGroup var \(prop.name): \(prop.type)")
-                initArgs.append("\(prop.name): \(prop.name)")
-            }
-        }
-
-        let paramArgs = initArgs.joined(separator: ", ")
-        let parentInit = properties.isEmpty
-            ? "\(structName)()"
-            : "\(structName)(\(paramArgs))"
-
-        let members = memberDeclarations.joined(separator: "\n            ")
-
-        // CLI run() mirrors the user's sync/async choice
-        // Note: the outer `try` is already in the template below
-        let cliRunCall = isAsyncRun ? "await command.run()" : "command.run()"
-        let cliRunModifier = isAsyncRun ? "async " : ""
-
-        return """
-            #if canImport(ArgumentParser)
-            struct CLI: AsyncParsableCommand {
-                \(members)
-
-                mutating func run() \(cliRunModifier)throws {
-                    let command = \(parentInit)
-                    let result = try \(cliRunCall)
-                    print(result)
-                }
-            }
-            #endif
-            """
     }
 }
 

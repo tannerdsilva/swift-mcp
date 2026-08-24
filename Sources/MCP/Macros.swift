@@ -3,32 +3,32 @@
 // This source file is part of the MCP open source project
 //
 // Copyright (c) 2024 and the MCP project authors
-// Licensed under Apache License v2.0
+// Licensed under the MIT License
 //
 // See LICENSE.txt for license information
 //
 //===----------------------------------------------------------------------===//
 
-/// A macro that generates dual `AsyncParsableCommand` and `MCPTool` conformances
-/// from a single struct declaration.
+/// A macro that generates an ``MCPTool`` conformance from a single struct declaration.
 ///
 /// Apply this macro to a struct that uses `@Argument`, `@Option`, `@Flag`, and
 /// `@OptionGroup` property wrappers and defines a `run()` method. The macro
 /// generates:
 ///
-/// 1. An extension adding `MCPTool` conformance for MCP server use
-/// 2. A nested `CLI` type conforming to `AsyncParsableCommand` for CLI use
-///    (requires `import ArgumentParser` in the client file)
+/// 1. A static ``MCPToolConfiguration``.
+/// 2. A static ``MCPTool/discoverParameters()`` returning compile-time
+///    parameter metadata.
+/// 3. ``MCPTool/apply(arguments:)`` and ``MCPTool/invoke(context:)`` that
+///    call through to the user's `run()`, auto-detecting sync/async.
 ///
-/// The wrapper mapping is 1:1 and transparent:
-///   `@Argument`   → `@Argument`   / `@Argument` (MCP)
-///   `@Option`     → `@Option`     / `@Option` (MCP)
-///   `@Flag`       → `@Flag`       / `@Flag` (MCP)
-///   `@OptionGroup` → `@OptionGroup` / `@OptionGroup` (MCP)
+/// The wrapper mapping is 1:1 and transparent with the parameter kinds:
+///   `@Argument` → ``MCPParamKind/argument`` (required)
+///   `@Option`   → ``MCPParamKind/option``   (optional, has default value)
+///   `@Flag`     → ``MCPParamKind/flag``     (Boolean)
+///   `@OptionGroup` → flattened via generated ``StaticMCPGroup`` metadata
 ///
-/// Usage with individual wrappers:
+/// Usage:
 /// ```swift
-/// import ArgumentParser
 /// import MCP
 ///
 /// @MCPCommand(description: "Greet someone by name")
@@ -44,14 +44,15 @@
 ///
 ///     func run() async throws -> String {
 ///         let greeting = formal ? "Greetings" : "Hello"
-///         return Array(repeating: "\\(greeting), \\(name)!", count: count)
-///             .joined(separator: "\\n")
+///         return Array(repeating: "\(greeting), \(name)!", count: count)
+///             .joined(separator: "\n")
 ///     }
 /// }
 /// ```
 ///
 /// Usage with option groups:
 /// ```swift
+/// @MCPOptionGroup
 /// struct SharedOptions {
 ///     @Option(description: "Verbose output")
 ///     var verbose: Bool = false
@@ -68,11 +69,6 @@
 /// }
 /// ```
 ///
-/// The generated `CLI` type can be used as a root command:
-/// ```swift
-/// Greet.CLI.main()
-/// ```
-///
 /// The generated `MCPTool` conformance allows the struct to be registered
 /// directly with an `MCPServer`:
 /// ```swift
@@ -80,7 +76,7 @@
 ///     Greet()
 /// }
 /// ```
-@attached(extension, conformances: MCPTool, names: named(configuration), named(invoke), named(CLI), named(discoverParameters), named(apply))
+@attached(extension, conformances: MCPTool, names: named(configuration), named(invoke), named(discoverParameters), named(apply))
 public macro MCPCommand(
     description: String = "",
     name: String? = nil,
@@ -169,6 +165,22 @@ public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOp
 ///     name: "demo",
 ///     version: "1.0.0",
 ///     address: .hostname("127.0.0.1", port: 8080)
+/// )
+/// struct MyApp {
+///     @Tool var greet = Greet()
+/// }
+/// ```
+///
+/// ## Custom Transport
+///
+/// Pass a ``MCPTransport`` value to use a custom transport instead of the
+/// default stdio transport. Specify either `address` or `transport`, not both:
+///
+/// ```swift
+/// @MCPApplication(
+///     name: "demo",
+///     version: "1.0.0",
+///     transport: TCPTransport(address: .localhostIPv4(port: 8080))
 /// )
 /// struct MyApp {
 ///     @Tool var greet = Greet()

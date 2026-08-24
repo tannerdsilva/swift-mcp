@@ -3,7 +3,7 @@
 // This source file is part of the MCP open source project
 //
 // Copyright (c) 2024 and the MCP project authors
-// Licensed under Apache License v2.0
+// Licensed under the MIT License
 //
 // See LICENSE.txt for license information
 //
@@ -74,11 +74,17 @@ public final class MCPServer: Service, @unchecked Sendable {
     private var tools: [String: any MCPTool.Type]
     /// Instance-registered tools (name → instance).
     private var toolInstances: [String: any MCPTool] = [:]
-    private let _logger: Logger
+    private var _logger: Logger
     private let transport: any MCPTransport
 
     /// The logger used by this server.
     public var logger: Logger { _logger }
+
+    /// The log level of the server's logger.
+    public var logLevel: Logger.Level {
+        get { _logger.logLevel }
+        set { _logger.logLevel = newValue }
+    }
 
     /// Creates a new MCP server.
     ///
@@ -137,14 +143,57 @@ public final class MCPServer: Service, @unchecked Sendable {
         }
     }
 
-    /// Creates a new MCP server with a custom transport (for testing).
+    /// Creates a new MCP server bound to a specific address with a caller
+    /// access resolver.
+    ///
+    /// This initializer behaves like the address-based one, but lets you
+    /// supply the underlying ``TCPTransport`` access resolver directly — the
+    /// hook that maps a caller's source address string to an ``AccessLevel``
+    /// once per connection, at accept time.
+    ///
+    /// - Parameters:
+    ///   - name: The server name (sent to clients during initialization).
+    ///   - version: The server version (e.g. "1.0.0").
+    ///   - address: The ``ServerAddress`` to bind to.
+    ///   - allowIPv4MappedIPv6: When `true`, binding to an IPv6 address like
+    ///     `::` also accepts IPv4 connections. Defaults to `false`.
+    ///   - accessResolver: A closure mapping a caller's source address string
+    ///     to an ``AccessLevel``. Run once per connection, at accept time.
+    ///   - tools: A ``MCPToolBuilder`` closure that returns tools to register.
+    ///     Pass an empty closure `{}` to register tools later via ``registerInstance(_:instance:)``.
+    public convenience init(
+        name: String,
+        version: String,
+        address: ServerAddress,
+        allowIPv4MappedIPv6: Bool = false,
+        accessResolver: @escaping @Sendable (String) -> AccessLevel,
+        @MCPToolBuilder tools: () -> [any MCPTool]
+    ) {
+        self.init(
+            name: name,
+            version: version,
+            transport: TCPTransport(
+                address: address,
+                allowIPv4MappedIPv6: allowIPv4MappedIPv6,
+                accessResolver: accessResolver
+            ),
+            tools: tools
+        )
+    }
+
+    /// Creates a new MCP server with a custom transport.
+    ///
+    /// Use this initializer to inject a ``TCPTransport`` configured with a
+    /// custom ``TCPTransport/init(address:eventLoopGroup:allowIPv4MappedIPv6:accessResolver:)``
+    /// so you can control per-connection authorization (see <doc:AccessControl>).
     ///
     /// - Parameters:
     ///   - name: The server name.
     ///   - version: The server version.
     ///   - transport: The transport to use.
     ///   - tools: A ``MCPToolBuilder`` closure that returns tools to register.
-    init(
+    ///     Pass an empty closure `{}` to register tools later via ``registerInstance(_:instance:)``.
+    public init(
         name: String,
         version: String,
         transport: any MCPTransport,
@@ -442,6 +491,12 @@ public final class MCPServer: Service, @unchecked Sendable {
         guard let toolType = tools[toolName] else {
             // Check instance-registered tools
             if let instance = toolInstances[toolName] {
+                // Enforce access control for instance-registered tools exactly
+                // as for type-registered ones.
+                guard caller.accessLevel >= type(of: instance).configuration.requiredAccess else {
+                    _logger.warning("Access denied for instance tool: \(toolName) (caller level \(caller.accessLevel.rawValue))")
+                    return makeErrorResponse(id: id, code: -32000, message: "Access denied: \(toolName)")
+                }
                 // Use the instance directly
                 var mutableInstance = instance
                 try mutableInstance.apply(arguments: arguments)

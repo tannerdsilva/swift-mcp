@@ -41,7 +41,14 @@ public struct MCPApplicationMacro: MemberMacro {
         // Extract macro arguments
         let serverName = extractStringArgument(from: node, name: "name") ?? ""
         let serverVersion = extractStringArgument(from: node, name: "version") ?? ""
-        let addressArg = extractAddressArgument(from: node)
+        let addressArg = extractExpressionArgument(from: node, name: "address")
+        let transportArg = extractExpressionArgument(from: node, name: "transport")
+
+        if addressArg != nil && transportArg != nil {
+            throw MacroError.message(
+                "@MCPApplication: specify either 'address' or 'transport', not both"
+            )
+        }
 
         // Find all @Tool properties with their types and availability
         let toolProperties = extractToolProperties(from: declaration)
@@ -65,6 +72,7 @@ public struct MCPApplicationMacro: MemberMacro {
             serverName: serverName,
             serverVersion: serverVersion,
             addressArg: addressArg,
+            transportArg: transportArg,
             toolProperties: toolProperties
         )
 
@@ -77,12 +85,12 @@ public struct MCPApplicationMacro: MemberMacro {
 
     // MARK: - Address Argument Extraction
 
-    /// Extracts the `address` parameter from the macro attribute.
-    /// Returns the full expression string if present, or nil.
-    static func extractAddressArgument(from node: AttributeSyntax) -> String? {
+    /// Extracts an expression-valued parameter (e.g. `address`, `transport`)
+    /// from the macro attribute. Returns the full expression string, or nil.
+    static func extractExpressionArgument(from node: AttributeSyntax, name: String) -> String? {
         guard let argList = node.arguments?.as(LabeledExprListSyntax.self) else { return nil }
         for arg in argList {
-            guard let label = arg.label, label.text == "address" else { continue }
+            guard let label = arg.label, label.text == name else { continue }
             return trimmed(arg.expression.description)
         }
         return nil
@@ -216,21 +224,15 @@ public struct MCPApplicationMacro: MemberMacro {
         serverName: String,
         serverVersion: String,
         addressArg: String?,
+        transportArg: String?,
         toolProperties: [ToolPropertyInfo]
     ) -> String {
-        // Build register calls for each @Tool property
-        _ = toolProperties.map { prop in
-            let call = "        server.register(app.\(prop.name))"
-            if prop.isDebugOnly {
-                return "#if DEBUG\n\(call)\n#endif"
-            }
-            return call
-        }.joined(separator: "\n")
-
-        // Build server initialization with or without address
-        let serverInit: String
+        // Build the server initialization with the requested transport
         let toolList = toolProperties.map { "            app.\($0.name)" }.joined(separator: "\n")
-        if let address = addressArg {
+        let serverInit: String
+        if let transport = transportArg {
+            serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", transport: \(transport)) {\n\(toolList)\n        }"
+        } else if let address = addressArg {
             serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", address: \(address)) {\n\(toolList)\n        }"
         } else {
             serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\") {\n\(toolList)\n        }"
@@ -241,7 +243,6 @@ public struct MCPApplicationMacro: MemberMacro {
         static func main() async throws {
             let app = \(structName)()
             \(serverInit)
-            _ = app
             try await server.runService()
         }
         """

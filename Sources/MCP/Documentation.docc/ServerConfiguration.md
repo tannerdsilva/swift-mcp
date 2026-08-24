@@ -1,29 +1,35 @@
 # Server Configuration
 
-How to configure the MCP server, including transports, addresses, and tool registration.
+How to configure the MCP server, including transports, addresses, tool
+registration, and running it.
 
 ## Overview
 
-The ``MCPServer`` class is the main entry point for creating an MCP server. It handles tool registration, JSON-RPC message routing, transport I/O, and lifecycle management.
+The ``MCPServer`` class is the main entry point for creating an MCP server. It
+handles tool registration, JSON-RPC message routing, transport I/O, and
+lifecycle management via Swift Service Lifecycle.
 
-## Basic Configuration
+## Creating a Server
 
 ```swift
-let server = MCPServer(
-    name: "my-server",
-    version: "1.0.0",
-    transport: StdioTransport(),  // default
-    logger: Logger(label: "my-server")
-)
+// Uses StdioTransport by default
+let server = MCPServer(name: "my-server", version: "1.0.0")
+
+// With tools registered via the result builder
+let server = MCPServer(name: "demo", version: "1.0.0") {
+    Greet()
+    Calculate()
+}
 ```
 
 ## Transport Configuration
 
 ### Stdio Transport (Default)
 
+Stdio requires no configuration:
+
 ```swift
 let server = MCPServer(name: "demo", version: "1.0.0")
-// Uses StdioTransport by default
 ```
 
 ### TCP Transport with Address
@@ -36,28 +42,43 @@ let server = MCPServer(
 )
 ```
 
+`ServerAddress` supports IPv4, IPv6, dual-stack, and Unix domain sockets — see
+<doc:TransportDesign>.
+
 ### TCP Transport with Custom Access Resolver
 
 ```swift
 let transport = TCPTransport(
     address: .hostname("0.0.0.0", port: 8080),
-    allowIPv4MappedIPv6: true,
     accessResolver: { address in
-        if address.hasPrefix("127.0.0.1") { return .admin }
-        if address.hasPrefix("10.") { return .authenticated }
+        if address.hasPrefix("[IPv4]127.0.0.1") { return .admin }
         return .public
     }
 )
 let server = MCPServer(name: "demo", version: "1.0.0", transport: transport)
 ```
 
-### Unix Domain Socket
+The server also offers a convenience initializer that builds the
+``TCPTransport`` for you:
 
 ```swift
 let server = MCPServer(
     name: "demo",
     version: "1.0.0",
-    address: .unixDomainSocket(path: "/tmp/mcp.sock")
+    address: .hostname("0.0.0.0", port: 8080),
+    accessResolver: { address in address.hasPrefix("[IPv4]127.0.0.1") ? .admin : .public }
+)
+```
+
+### Custom Transport
+
+Any ``MCPTransport`` implementation can be injected:
+
+```swift
+let server = MCPServer(
+    name: "demo",
+    version: "1.0.0",
+    transport: MyHTTPTransport()
 )
 ```
 
@@ -77,6 +98,9 @@ server.register(Calculate())
 let server = MCPServer(name: "demo", version: "1.0.0") {
     Greet()
     Calculate()
+    if isDebug {
+        DebugTool()
+    }
 }
 ```
 
@@ -84,14 +108,18 @@ let server = MCPServer(name: "demo", version: "1.0.0") {
 
 ```swift
 server.register(GetWeather())
-server.unregister("get_weather")  // Remove a tool at runtime
+server.unregister("getWeather")  // Remove a tool at runtime
 ```
 
-If a tool with the same name is already registered, a warning is logged and the existing tool is overwritten.
+If a tool with the same name is already registered, a warning is logged and
+the existing tool is overwritten. Instance-registered tools use
+``MCPServer/registerInstance(_:instance:)``; note that instance-registered
+tools are not filtered by access level (only type-registered tools are).
 
 ### Macro Application
 
 ```swift
+@main
 @MCPApplication(name: "demo", version: "1.0.0")
 struct MyApp {
     @Tool var greet = Greet()
@@ -101,8 +129,11 @@ struct MyApp {
 
 ## Running the Server
 
+The server conforms to the `Service` protocol and must be run via a
+``ServiceGroup``.
+
 ```swift
-// Simple (recommended)
+// Simple (recommended): signal-based graceful shutdown on SIGTERM/SIGINT
 try await server.runService()
 
 // Custom ServiceGroup
@@ -116,19 +147,16 @@ let serviceGroup = ServiceGroup(
 try await serviceGroup.run()
 ```
 
+See <doc:LifecycleManagement> for combining the server with other services.
+
 ## Logging
 
-The server uses ``Logging`` from swift-log. Configure the logger to control verbosity:
+The server uses `Logging` from swift-log with a fixed label (`mcp.server`).
+Control verbosity through the server's ``MCPServer/logLevel`` property:
 
 ```swift
-var logger = Logger(label: "mcp.server")
-logger.logLevel = .debug
-
-let server = MCPServer(
-    name: "demo",
-    version: "1.0.0",
-    logger: logger
-)
+let server = MCPServer(name: "demo", version: "1.0.0")
+server.logLevel = .debug
 ```
 
 ## Related Articles

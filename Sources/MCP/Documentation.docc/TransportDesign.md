@@ -39,12 +39,19 @@ Listens for TCP connections and communicates using newline-delimited JSON. Suppo
 let transport = TCPTransport(
     address: .hostname("127.0.0.1", port: 8080),
     accessResolver: { address in
-        address.hasPrefix("127.0.0.1") ? .admin : .public
+        address.hasPrefix("[IPv4]127.0.0.1") ? .admin : .public
     }
 )
 ```
 
-The ``TCPTransport`` accepts an ``accessResolver`` closure that maps source IP addresses to ``AccessLevel`` values. This is resolved once per connection and stamped on every message from that connection.
+The ``TCPTransport`` accepts an ``accessResolver`` closure that maps source
+addresses to ``AccessLevel`` values. This is resolved once per connection and
+stamped on every message from that connection.
+
+> The resolver receives NIO's socket description string, which includes a
+> scheme prefix and the port — for example `[IPv4]127.0.0.1:54321` for IPv4
+> and `[IPv6]::1:54321` for IPv6. Match against the prefix form shown above
+> rather than the bare address.
 
 #### Address Types
 

@@ -1,4 +1,4 @@
-# Server Configuration
+# Example: Server Configuration
 
 This article covers every way to configure and launch an MCP server — stdio,
 TCP with explicit IP bindings, Unix domain sockets, dual-stack, custom
