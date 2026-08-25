@@ -4,7 +4,7 @@
 
 ## Overview
 
-A Swift package that provides an MCP (Model Context Protocol) server framework with a declarative, property-wrapper-based API inspired by Swift Argument Parser and Hummingbird. Includes a macro suite (`@MCPCommand`) that generates both `AsyncParsableCommand` and `MCPTool` conformances from a single struct declaration.
+A Swift package that provides an MCP (Model Context Protocol) server framework with a declarative, property-wrapper-based API. Includes a macro suite (`@MCPCommand`, `@FuncTool`, `@MCPApplication`, `@MCPOptionGroup`) that generates `MCPTool` conformances and server entry points at compile time — no runtime reflection.
 
 The server uses **Swift Service Lifecycle** as its primary runtime mechanism. `MCPServer` conforms to the `Service` protocol and must be run via a `ServiceGroup`. Use `runService()` for a convenient signal-handling wrapper, or create your own `ServiceGroup` for full control.
 
@@ -12,98 +12,66 @@ The server uses **Swift Service Lifecycle** as its primary runtime mechanism. `M
 
 ```
 Sources/
-  MCP/                           — Main library (12 files, ~2,500 lines)
+  MCP/                           — Main library (14 files)
     Core/                        — Core protocols and types
-      MCPTool.swift              — MCPTool protocol, parameter discovery, argument injection
-      MCPToolConfiguration.swift — Tool metadata (description, name)
-      MCPParam.swift             — MCPParamKind, MCPParameterInfo, MCPParamProtocol, GroupParamProtocol
+      MCPTool.swift              — MCPTool protocol, MCPContext; default discovery/apply
+      MCPToolConfiguration.swift — Tool metadata (description, name, access)
+      MCPParam.swift             — MCPParameterInfo, MCPToolID, AccessLevel, MCPCallerInfo, StaticMCPGroup
       MCPContent.swift           — MCPToolResult, MCPContent, AnyCodable
       MCPError.swift             — MCPError enum (Error + Sendable + Equatable)
     PropertyWrappers/
-      MCPPropertyWrappers.swift  — @MCPArgument, @MCPOption, @MCPFlag, @MCPOptionGroup
-      DualWrappers.swift         — @Argument, @Option, @Flag, @OptionGroup (user-facing dual-use wrappers)
+      PropertyWrappers.swift     — @Argument, @Option, @Flag, @OptionGroup (value-type wrappers)
+      Tool.swift                 — @Tool property wrapper + ToolAvailability
     Schema/
       JSONSchemaBuilder.swift    — JSON Schema Draft 7 generation from parameter metadata
     Protocol/
-      MCPProtocol.swift          — JSON-RPC types, MCP protocol message types (internal)
+      MCPProtocol.swift          — typed JSON-RPC/MCP message layer (request/response/id, results)
     Server/
       MCPServer.swift            — Server class (conforms to Service from ServiceLifecycle)
       Transport.swift            — MCPTransport protocol + StdioTransport + TransportMessageHandler actor
       TCPTransport.swift         — TCP transport (IPv4, IPv6, dual-stack, Unix sockets)
-      ServerAddress.swift        — ServerAddress enum (IPv4, IPv6, dual-stack, Unix socket)
-    Macros.swift                 — @MCPCommand and @MCPApplication macro declarations
+      ServerAddress.swift        — ServerAddress enum (hostname, Unix socket)
+    Macros.swift                 — @MCPCommand, @FuncTool, @MCPApplication, @MCPOptionGroup macro declarations
   MCPMacros/                     — Macro implementation target (SwiftSyntax)
     Plugin.swift                 — Compiler plugin entry point
-    MCPCommandMacro.swift        — ExtensionMacro: generates MCPTool + CLI types
-    MCPApplicationMacro.swift    — MemberMacro: generates ToolID enum, dispatch, main()
-  MCPDemo/                       — Demo executable using @MCPCommand
-    main.swift
+    SharedGenerator.swift        — Shared apply/discovery codegen helpers
+    MCPCommandMacro.swift        — ExtensionMacro: generates the MCPTool conformance
+    MCPOptionGroupMacro.swift    — ExtensionMacro: generates StaticMCPGroup metadata
+    ToolMacro.swift              — PeerMacro: generates tool structs from functions
+    MCPApplicationMacro.swift    — MemberMacro: generates ToolID enum, dispatch, main
 Tests/
-  MCPTests/                      — 67 framework tests (Swift Testing)
-    MCPTests.swift
-  MCPMacroTests/                 — 13 macro expansion tests
-    MCPCommandMacroTests.swift
-Documentation/                   — 7 documentation articles + 5 example articles
-    GettingStarted.md
-    ToolDefinition.md
-    MacroGuide.md
-    OptionGroups.md
-    ServerConfiguration.md
-    MCPProtocol.md
-    Architecture.md
-    MigrationGuide.md
-    Examples/                     — Comprehensive working examples
+  MCPTests/                      — Framework + integration tests (Swift Testing)
+    MCPTests.swift               — unit, server routing, registry, transport end-to-end tests
+  MCPMacroTests/                 — Macro expansion + diagnostic tests
+    MCPCommandMacroTests.swift   — strict expansion asserts with re-parse gate
+Sources/MCP/Documentation.docc/ — DocC catalog (primary documentation)
+    GettingStarted.md, ToolDefinition.md, MacroGuide.md, OptionGroups.md,
+    ServerConfiguration.md, MCPProtocol.md, TransportDesign.md,
+    LifecycleManagement.md, AccessControl.md, Architecture.md,
+    MigrationGuide.md, MCP.md, Examples.md
+    Examples/                    — Comprehensive working examples
       BasicTools.md               — Sync/async, return types, error handling
-      ServerConfiguration.md      — All transport and lifecycle patterns
-      AdvancedTools.md            — Option groups, access control, composition
+      ExampleServerConfiguration.md — Transports, addresses, lifecycle, access control
+      AdvancedTools.md            — Option groups, complex types, composition
       IntegrationPatterns.md      — Hummingbird, Vapor, clients, testing, Docker
       RealWorldScenarios.md       — File server, DB proxy, AI assistant, build system
+      /LICENSE.txt
 ```
 
-## Dual-Use Macro: `@MCPCommand`
+## Macro Suite
 
-The `@MCPCommand` macro lets you write ONE struct and get both an `AsyncParsableCommand` (for CLI) and an `MCPTool` (for MCP server) for free.
+swift-mcp ships four macros that eliminate boilerplate at compile time:
 
-### Wrapper Mapping
+- `@MCPCommand` — generates an `MCPTool` conformance in an extension from a struct with a `run()` method. The struct must declare exactly one `run()`; its `async`/`throws`/`Void` shape is detected at compile time and the generated code carries only the matching `try`/`await` prefix. Property wrappers map transparently: `@Argument` (required), `@Option` (optional with default), `@Flag` (Bool, defaults false), `@OptionGroup` (flattened at compile time).
+- `@FuncTool` — generates an `MCPTool`-conforming struct from a `static` function nested in a type. Any return type is supported and rendered via `String(describing:)`; `Void` yields an empty text block. `_`-labeled, `inout`, and variadic parameters are rejected with diagnostics.
+- `@MCPApplication` — generates a server entry point: a `ToolID` enum, exhaustive `callTool(_:arguments:)` dispatch, and a `main()` that registers each `@Tool` property (used with `@main`).
+- `@MCPOptionGroup` — generates `StaticMCPGroup` metadata so option groups flatten at compile time.
 
-The mapping is 1:1 and transparent:
+## Parameter Wrappers
 
-| You write | ArgumentParser generates | MCP generates |
-|---|---|---|
-| `@Argument` | `@Argument` | `@MCPArgument` |
-| `@Option`   | `@Option`   | `@MCPOption`   |
-| `@Flag`     | `@Flag`     | `@MCPFlag`     |
-| `@OptionGroup` | `@OptionGroup` | `@MCPOptionGroup` |
+The property wrappers are **value types** (`struct`). Each tool instance follows a create → apply → invoke → discard discipline, so per-invocation mutation stays value semantics and never crosses tasks. Parameter metadata and argument injection are macro-generated at compile time — there is no `Mirror` reflection in the framework.
 
-### Usage
-
-```swift
-import MCP
-
-@MCPCommand(description: "Greet someone by name")
-struct Greet {
-    @Argument(description: "The person to greet")
-    var name: String = ""
-
-    @Option(description: "Number of times")
-    var count: Int = 1
-
-    @Flag(description: "Use a formal greeting")
-    var formal: Bool = false
-
-    func run() async throws -> String {
-        let greeting = formal ? "Greetings" : "Hello"
-        return Array(repeating: "\(greeting), \(name)!", count: count)
-            .joined(separator: "\n")
-    }
-}
-
-// Start the server with signal-based graceful shutdown
-let server = MCPServer(name: "demo", version: "1.0") {
-    Greet()
-}
-try await server.runService()
-```
+Wrapper values are constrained to `Codable & Sendable`. JSON-native scalars and fixed-width numerics inject directly (with cross-numeric coercion); any custom `Codable & Sendable` type (enums, structs, optionals) decodes from its JSON representation.
 
 ## Lifecycle Management
 
@@ -116,10 +84,10 @@ let server = MCPServer(name: "demo", version: "1.0.0") {
     Greet()
 }
 try await server.runService()
-// Graceful shutdown on SIGTERM/SIGINT
+// Graceful shutdown on SIGTERM/SIGINT; clean exit on client EOF (stdio)
 ```
 
-This wraps the server in a `ServiceGroup` with signal-based graceful shutdown. The server will cleanly shut down when it receives `SIGTERM` or `SIGINT`.
+This wraps the server in a `ServiceGroup` with signal-based graceful shutdown and `.gracefullyShutdownGroup` success termination.
 
 ### Custom ServiceGroup
 
@@ -129,7 +97,12 @@ let server = MCPServer(name: "demo", version: "1.0.0") {
 }
 let serviceGroup = ServiceGroup(
     configuration: .init(
-        services: [server],
+        services: [
+            ServiceGroupConfiguration.ServiceConfiguration(
+                service: server,
+                successTerminationBehavior: .gracefullyShutdownGroup
+            )
+        ],
         gracefulShutdownSignals: [.sigterm, .sigint],
         logger: server.logger
     )
@@ -140,30 +113,10 @@ try await serviceGroup.run()
 ### How It Works
 
 1. `MCPServer` conforms to the `Service` protocol from ServiceLifecycle
-2. `MCPServer.run()` creates a `ServiceGroup` with the transport wrapped as a `ClosureService`
-3. The transport's `start(handler:)` method runs as a child service
-4. Signal handling triggers graceful shutdown of all services
-5. The transport stops reading stdin and the server exits cleanly
-
-## Key Design Decisions
-
-### Property Wrappers Are Classes
-
-All property wrappers are implemented as **classes** (not structs) conforming to `@unchecked Sendable`. This is intentional: Mirror reflection on a tool instance returns mutable references to the wrapper objects, allowing the framework to inject argument values after initialization.
-
-### Mirror-Based Parameter Discovery
-
-`MCPTool.discoverParameters()` uses `Mirror(reflecting:)` to iterate stored properties. It looks for children whose label starts with `_` (the synthesized backing-storage name for property wrappers) and whose value conforms to `MCPParamProtocol`. Option groups conforming to `GroupParamProtocol` are recursively flattened.
-
-### ServiceLifecycle Integration
-
-The server uses `swift-service-lifecycle` for lifecycle management, following the same pattern as Hummingbird 2.x:
-- `MCPServer` conforms to `Service`
-- `run()` creates a `ServiceGroup` internally
-- `runService()` adds signal handling
-- The transport is wrapped as a `ClosureService` child
-
-This ensures clean startup and shutdown, proper resource cleanup, and signal-based graceful termination.
+2. `MCPServer.run()` drives the transport directly and returns when the transport completes — client EOF on stdio, listener close on TCP — or after graceful shutdown stops it
+3. A graceful-shutdown handler registered in `run()` fans `MCPTransport/stop()` out to the transport, so signal-initiated shutdown wakes the poll-based stdio read loop promptly
+4. `runService()` configures the server service with `.gracefullyShutdownGroup` success termination behavior, so a completed session (EOF) ends the process cleanly instead of crashing with `serviceFinishedUnexpectedly`
+5. Hosts embedding `MCPServer` in their own `ServiceGroup` choose their own success termination behavior (`cancelGroup`, `gracefullyShutdownGroup`, or `ignore`)
 
 ## MCP Protocol Support
 
@@ -175,27 +128,28 @@ Currently implements:
 - `notifications/initialized` — Acknowledged (no-op)
 - `notifications/cancelled` — Acknowledged (no-op)
 
+Error codes: `-32700` parse error, `-32000` access denied, `-32601` method not found, `-32602` invalid params, `-32603` internal error/type mismatch.
+
 Not yet implemented:
 - `resources/list`, `resources/read` — Resource exposure
 - `prompts/list`, `prompts/get` — Prompt templates
-- HTTP+SSE transport (NIO dependency is available for this)
+- HTTP+SSE transport (implementable via the `MCPTransport` protocol)
 - Streaming responses
 - Progress notifications
 
 ## Building & Testing
 
 ```bash
-swift build           # Build the library, macros, and demo
-swift test            # Run all tests (80 total: 67 framework + 13 macro)
-swift run MCPDemo     # Run the demo server (reads from stdin, SIGTERM/SIGINT to stop)
+swift build           # Build the library and macros
+swift test            # Run all tests (framework + macro expansion)
+swift package --disable-sandbox generate-documentation   # Build the DocC catalog
 ```
 
 ## Conventions
 
-- **Swift 6 language mode** is enforced project-wide via `.swiftLanguageMode(.v6)`.
-- **StrictConcurrency** is enabled via `.enableExperimentalFeature("StrictConcurrency")`.
+- **Swift 6 language mode** is enforced target-wide via `.swiftLanguageMode(.v6)`.
 - **All tests use Swift Testing** (`import Testing`, `#expect(...)`, `@Test`).
-- **Public API** uses `public` visibility; internal types use `package` or `internal` as appropriate.
+- **StrictConcurrency** is implied by Swift 6 language mode; `@unchecked Sendable` is used only where documented (server registries guarded by a lock, transport flags).
+- **Public API** uses `public` visibility; internal types use `internal` as appropriate.
 - **Error types** conform to `Error`, `Sendable`, `Equatable`, and `LocalizedError`.
-- **Sendable conformance**: Use `@unchecked Sendable` only when necessary; document why.
-- **File header comments** follow the Apache 2.0 license header pattern.
+- **File header comments** follow the MIT license header pattern used across Sources.

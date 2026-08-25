@@ -1,4 +1,4 @@
-# Server Configuration
+# Example: Server Configuration
 
 This article covers every way to configure and launch an MCP server — stdio,
 TCP with explicit IP bindings, Unix domain sockets, dual-stack, custom
@@ -381,10 +381,12 @@ import MCP
 let transport = TCPTransport(
     address: .hostname("0.0.0.0", port: 8080),
     accessResolver: { address in
-        if address == "127.0.0.1" || address == "::1" {
+        // NIO remote-address description: "[IPv4]127.0.0.1:49152",
+        // "[IPv6]::1:49152", "[IPv6]::ffff:127.0.0.1:49152", ...
+        if address.hasPrefix("[IPv4]127.0.0.1") || address.hasPrefix("[IPv6]::1") {
             return .admin
-        } else if address.hasPrefix("10.0.") || address.hasPrefix("192.168.") {
-            return .user
+        } else if address.hasPrefix("[IPv4]10.") || address.hasPrefix("[IPv4]192.168.") {
+            return .authenticated
         } else {
             return .public
         }
@@ -403,11 +405,14 @@ let server = MCPServer(
 
 ### Access Levels
 
+The framework defines four ordered levels — see ``AccessLevel``:
+
 ```swift
-public enum AccessLevel: Int, Sendable, Comparable {
-    case `public` = 0
-    case user = 10
-    case admin = 20
+public enum AccessLevel: Int, Sendable, Comparable, Codable {
+    case `public` = 0          // visible to all callers
+    case authenticated = 1     // authenticated or internal callers
+    case admin = 2             // administrators only
+    case root = 3              // local process (stdio transport)
 }
 ```
 

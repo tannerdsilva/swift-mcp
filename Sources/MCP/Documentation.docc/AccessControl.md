@@ -53,15 +53,22 @@ The server filters tools based on the caller's access level. A caller with ``.au
 
 ### tools/call
 
-Before invoking a tool, the server checks:
+Before invoking a tool, the server checks the caller's access level. If the
+check fails, the server returns a JSON-RPC error with code ``-32000``:
 
 ```swift
 guard caller.accessLevel >= toolType.configuration.requiredAccess else {
-    throw MCPError.accessDenied(toolName)
+    return makeErrorResponse(id: id, code: -32000, message: "Access denied: \(toolName)")
 }
 ```
 
-If the check fails, the server returns a JSON-RPC error with code ``-32000``.
+The ``MCPError/accessDenied(_:)`` case is available for tools that need to
+report the failure inside their own logic.
+
+> Note: access control is enforced for both type-registered tools
+> (``MCPServer/register(_:)``) and instance-registered tools
+> (``MCPServer/registerInstance(_:instance:)``) in `tools/list` filtering and
+> `tools/call` enforcement.
 
 ## Transport-Level Resolution
 
@@ -77,10 +84,10 @@ The ``TCPTransport`` accepts an ``accessResolver`` closure that maps source IP a
 let transport = TCPTransport(
     address: .hostname("0.0.0.0", port: 8080),
     accessResolver: { address in
-        if address.hasPrefix("127.0.0.1") || address.hasPrefix("::1") {
+        if address.hasPrefix("[IPv4]127.0.0.1") || address.hasPrefix("[IPv6]::1") {
             return .admin
         }
-        if address.hasPrefix("10.") || address.hasPrefix("192.168.") {
+        if address.hasPrefix("[IPv4]10.") || address.hasPrefix("[IPv4]192.168.") {
             return .authenticated
         }
         return .public

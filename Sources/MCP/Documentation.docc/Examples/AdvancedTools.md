@@ -195,19 +195,15 @@ struct AdminPanel {
 let transport = TCPTransport(
     address: .hostname("0.0.0.0", port: 8080),
     accessResolver: { address in
-        // Extract IP (strip port if present)
-        let ip = address.split(separator: ":").first.map(String.init) ?? address
-
-        switch ip {
-        case "127.0.0.1", "::1", "::ffff:127.0.0.1":
-            return .admin       // localhost gets full access
-        case let s where s.hasPrefix("10.0."):
-            return .user        // internal network
-        case let s where s.hasPrefix("192.168."):
-            return .user        // internal network
-        default:
-            return .public      // external gets public tools only
+        // NIO remote-address description: "[IPv4]127.0.0.1:49152",
+        // "[IPv6]::1:49152", "[IPv6]::ffff:127.0.0.1:49152", ...
+        if address.hasPrefix("[IPv4]127.0.0.1") || address.hasPrefix("[IPv6]::1") {
+            return .admin           // localhost gets full access
         }
+        if address.hasPrefix("[IPv4]10.") || address.hasPrefix("[IPv4]192.168.") {
+            return .authenticated   // internal network
+        }
+        return .public              // external gets public tools only
     }
 )
 

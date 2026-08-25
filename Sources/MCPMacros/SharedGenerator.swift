@@ -117,35 +117,32 @@ func generateDiscoveryExpression(properties: [PropertyInfo]) -> String {
 // Builds the body for a generated `mutating func apply(arguments:)`.
 // `includeRequiredCheck` is false for option-group `mcpApply` bodies: the
 // parent tool's generated `apply` owns the missing-required check.
+//
+// The required-argument check is a direct scan of the request arguments
+// against the compile-time parameter metadata; there is no per-application
+// accumulator, so the generated code never carries an unused-variable
+// warning regardless of parameter shape (required, optional-only, groups,
+// or none at all).
 func generateApplyBody(properties: [PropertyInfo], includeRequiredCheck: Bool = true) -> String {
     var lines: [String] = []
-    if includeRequiredCheck {
-        lines.append("var setParams = Set<String>()")
-    }
 
     for prop in properties {
         switch prop.wrapperKind {
         case .argument, .option, .flag:
             lines.append(#"if let value = arguments["\#(escapeStringLiteral(prop.name))"] {"#)
             lines.append("    try self._\(prop.name)._setValue(value)")
-            if includeRequiredCheck {
-                lines.append(#"    setParams.insert("\#(escapeStringLiteral(prop.name))")"#)
-            }
             lines.append("}")
         case .optionGroup:
             lines.append("let groupParamNames = \(prop.type).mcpParameters.map(\\.name)")
             lines.append("if arguments.keys.contains(where: { groupParamNames.contains($0) }) {")
             lines.append("    try self._\(prop.name).mcpApply(arguments: arguments)")
-            lines.append("    for gp in \(prop.type).mcpParameters where arguments[gp.name] != nil {")
-            lines.append("        setParams.insert(gp.name)")
-            lines.append("    }")
             lines.append("}")
         }
     }
 
     if includeRequiredCheck {
         lines.append("for param in Self.discoverParameters() where param.required {")
-        lines.append("    if !setParams.contains(param.name) {")
+        lines.append("    if arguments[param.name] == nil {")
         lines.append("        throw MCPError.missingArgument(param.name)")
         lines.append("    }")
         lines.append("}")

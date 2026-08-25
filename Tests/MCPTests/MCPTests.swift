@@ -187,8 +187,8 @@ func shorthandTypeNormalization() {
     let tagsSchema = properties?["tags"] as? [String: Any]
     #expect(tagsSchema?["type"] as? String == "array")
 
-    // Optional-typed parameter metadata is emissed; injection of a raw
-    // String into `String?` is intentionally rejected by the wrapper cast.
+    // Optional-typed parameter metadata is emitted; a JSON value decodes into
+    // `String?` via the wrapper's Codable fallback.
     #expect(properties?["level"] != nil)
 }
 
@@ -1332,4 +1332,668 @@ func parameterEnumValues() async throws {
 final class MutableBox<T>: @unchecked Sendable {
     var value: T
     init(_ value: T) { self.value = value }
+}
+
+// MARK: - Termination & Protocol Path Tests
+
+@MCPCommand(description: "Numeric coercion probe")
+struct NumericProbe {
+    @Option(description: "ratio") var ratio: Double = 0
+    @Option(description: "i8") var i8: Int8 = 0
+    @Option(description: "i32") var i32: Int32 = 0
+    @Option(description: "count") var count: Int = 0
+    func run() async throws -> String { "\(ratio) \(i8) \(i32) \(count)" }
+}
+
+/// A transport that finishes on its own after dispatching queued messages,
+/// simulating a clean client EOF on the stdio pipe.
+final class EOFMockTransport: MCPTransport, @unchecked Sendable {
+    var receivedMessages: [Data] = []
+    var sentMessages: [Data] = []
+
+    func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
+        for message in receivedMessages {
+            if let response = try await handler(message, MCPCallerInfo(sourceAddress: "eof", accessLevel: .admin)) {
+                sentMessages.append(response)
+            }
+        }
+        // Never stopped externally: the transport finishing is the EOF event.
+        return
+    }
+
+    func stop() async throws {}
+}
+
+@Test("Server returns cleanly when the transport completes on its own (EOF)")
+func serverReturnsCleanlyOnTransportEOF() async throws {
+    let transport = EOFMockTransport()
+    let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) { Greet() }
+    // Regression guard for F1: before the fix this threw
+    // ServiceGroupError.serviceFinishedUnexpectedly (crash in real processes).
+    try await server.runService()
+    #expect(transport.sentMessages.isEmpty)
+}
+
+@Test("Server returns cleanly when stopped externally")
+func serverReturnsCleanlyWhenStopped() async throws {
+    let transport = MockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "ping"])
+    ]
+    let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) { Greet() }
+
+    let task = Task { try await server.runService() }
+    try await Task.sleep(nanoseconds: 300_000_000)
+    try await server.stop()
+
+    let result = await task.result
+    #expect(throws: Never.self) { try result.get() }
+}
+
+@Test("Server echoes string request IDs")
+func serverEchoesStringIDs() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": "abc", "method": "ping"]),
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": "xyz", "method": "tools/list"])
+    ]
+    let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) { Greet() }
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 2)
+    let ping = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    #expect(ping?["id"] as? String == "abc")
+    #expect(ping?["result"] != nil)
+    let list = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    #expect(list?["id"] as? String == "xyz")
+}
+
+@Test("Server returns a parse error for a malformed frame")
+func serverParseError() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [Data("this is not json".utf8)]
+    let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) { Greet() }
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let error = response?["error"] as? [String: Any]
+    #expect(error?["code"] as? Int == -32700)
+}
+
+@Test("Integer JSON values satisfy Double and fixed-width parameters")
+func numericCoercionIntToWider() throws {
+    var tool = NumericProbe()
+    try tool.apply(arguments: ["ratio": 1, "i8": -7, "i32": 70000, "count": 9])
+    #expect(tool.ratio == 1.0)
+    #expect(tool.i8 == -7)
+    #expect(tool.i32 == 70000)
+    #expect(tool.count == 9)
+}
+
+@Test("Whole Double JSON values satisfy Int parameters; fractional ones are rejected")
+func numericCoercionWholeDoubleOnly() throws {
+    var tool = NumericProbe()
+    try tool.apply(arguments: ["count": 3.0])
+    #expect(tool.count == 3)
+
+    #expect(throws: MCPError.self) {
+        try tool.apply(arguments: ["count": 3.5])
+    }
+}
+
+@Test("AnyCodable round-trips JSON null")
+func anyCodableNullRoundTrip() throws {
+    let data = try JSONEncoder().encode(AnyCodable(NSNull()))
+    let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+    #expect(decoded.value is NSNull)
+}
+
+@Test("Null argument values produce a type mismatch, not a parse error")
+func serverNullArgumentIsTypeMismatch() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "greet", "arguments": ["name": NSNull()]]
+        ])
+    ]
+    let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) { Greet() }
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let error = response?["error"] as? [String: Any]
+    #expect(error?["code"] as? Int == -32603)
+}
+
+// MARK: - F3/F4/F5 Compiled Integration Fixtures
+
+enum MathTools {
+    @FuncTool(description: "Add integers")
+    static func addInts(a: Int, b: Int) -> Int { a + b }
+}
+
+struct Point: CustomStringConvertible {
+    let x: Int
+    let y: Int
+    var description: String { "Point(x: \(x), y: \(y))" }
+}
+
+enum GeomTools {
+    @FuncTool(description: "Make point")
+    static func makePoint(x: Int, y: Int) -> Point { Point(x: x, y: y) }
+}
+
+enum SideEffectTools {
+    @FuncTool(description: "Notify")
+    static func notifyToDo(message: String) -> Void { _ = message }
+}
+
+enum AsyncTools {
+    @FuncTool(description: "Async add")
+    static func asyncAdd(a: Int, b: Int) async throws -> Int { a + b }
+}
+
+enum ThrowTools {
+    @FuncTool(description: "Failing tool")
+    static func failing(x: Int) throws -> String {
+        if x < 0 { throw MCPError.internalError("negative input") }
+        return "ok \(x)"
+    }
+}
+
+@Test("FuncTool wraps a function returning Int (was a hard compile error)")
+func funcToolIntInvocation() async throws {
+    var tool = MathTools.addIntsTool()
+    try tool.apply(arguments: ["a": 2, "b": 3])
+    let result = try await tool.invoke(context: MCPContext(arguments: [:]))
+    #expect(result.isError == false)
+    if case .text(let text) = result.content[0] {
+        #expect(text == "5")
+    } else {
+        Issue.record("Expected text content")
+    }
+}
+
+@Test("FuncTool wraps a function returning a custom type")
+func funcToolCustomReturnInvocation() async throws {
+    var tool = GeomTools.makePointTool()
+    try tool.apply(arguments: ["x": 1, "y": 2])
+    let result = try await tool.invoke(context: MCPContext(arguments: [:]))
+    #expect(result.isError == false)
+    if case .text(let text) = result.content[0] {
+        #expect(text == "Point(x: 1, y: 2)")
+    } else {
+        Issue.record("Expected text content")
+    }
+}
+
+@Test("FuncTool wraps a Void-returning function as an empty text block")
+func funcToolVoidInvocation() async throws {
+    var tool = SideEffectTools.notifyToDoTool()
+    try tool.apply(arguments: ["message": "hi"])
+    let result = try await tool.invoke(context: MCPContext(arguments: [:]))
+    #expect(result.isError == false)
+    if case .text(let text) = result.content[0] {
+        #expect(text == "")
+    } else {
+        Issue.record("Expected text content")
+    }
+}
+
+@Test("FuncTool wraps an async throwing function")
+func funcToolAsyncThrowingInvocation() async throws {
+    var tool = AsyncTools.asyncAddTool()
+    try tool.apply(arguments: ["a": 4, "b": 5])
+    let result = try await tool.invoke(context: MCPContext(arguments: [:]))
+    #expect(result.isError == false)
+    if case .text(let text) = result.content[0] {
+        #expect(text == "9")
+    } else {
+        Issue.record("Expected text content")
+    }
+}
+
+@Test("FuncTool propagates thrown errors")
+func funcToolThrownErrorPropagation() async throws {
+    var tool = ThrowTools.failingTool()
+    try tool.apply(arguments: ["x": -1])
+    do {
+        _ = try await tool.invoke(context: MCPContext(arguments: [:]))
+        Issue.record("Expected the tool's thrown error to propagate")
+    } catch MCPError.internalError {
+        // expected: the wrapped function threw
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+}
+
+@MCPCommand(description: "Sync no throw")
+struct SyncNoThrowCommand {
+    @Option(description: "n") var n: Int = 1
+    func run() -> String { "sync \(n)" }
+}
+
+@MCPCommand(description: "Async no throw")
+struct AsyncNoThrowCommand {
+    func run() async -> String { "async done" }
+}
+
+@MCPCommand(description: "Sync throwing")
+struct SyncThrowingCommand {
+    func run() throws -> String {
+        throw MCPError.internalError("boom")
+    }
+}
+
+@Test("MCPCommand sync non-throwing run() compiles and invokes")
+func mcpCommandSyncNonThrowingInvocation() async throws {
+    var tool = SyncNoThrowCommand()
+    try tool.apply(arguments: ["n": 2])
+    let result = try await tool.invoke(context: MCPContext(arguments: [:]))
+    #expect(result.isError == false)
+    if case .text(let text) = result.content[0] {
+        #expect(text == "sync 2")
+    } else {
+        Issue.record("Expected text content")
+    }
+}
+
+@Test("MCPCommand async non-throwing run() compiles and invokes")
+func mcpCommandAsyncNonThrowingInvocation() async throws {
+    var tool = AsyncNoThrowCommand()
+    let result = try await tool.invoke(context: MCPContext(arguments: [:]))
+    #expect(result.isError == false)
+    if case .text(let text) = result.content[0] {
+        #expect(text == "async done")
+    } else {
+        Issue.record("Expected text content")
+    }
+}
+
+@Test("MCPCommand sync throwing run() propagates errors")
+func mcpCommandSyncThrowingInvocation() async throws {
+    var tool = SyncThrowingCommand()
+    do {
+        _ = try await tool.invoke(context: MCPContext(arguments: [:]))
+        Issue.record("Expected the command's thrown error to propagate")
+    } catch MCPError.internalError {
+        // expected: run() threw
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+}
+
+// MARK: - Transport End-to-End Tests
+
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
+/// A self-contained stdio pair over injected pipes, so the transport's EOF and
+/// shutdown paths are exercised in-process instead of via a subprocess.
+final class StdioPair {
+    let transport: StdioTransport
+    let inputWrite: FileHandle
+    let outputRead: FileHandle
+    let outputWrite: FileHandle
+
+    init() {
+        let input = Pipe()
+        let output = Pipe()
+        transport = StdioTransport(input: input.fileHandleForReading, output: output.fileHandleForWriting)
+        inputWrite = input.fileHandleForWriting
+        outputRead = output.fileHandleForReading
+        outputWrite = output.fileHandleForWriting
+    }
+}
+
+/// A minimal blocking TCP client used to drive the TCP transport end-to-end.
+private enum RawSocketClient {
+    static func request(_ payload: String, port: Int) throws -> String {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw MCPError.transportError("socket() failed: \(String(cString: strerror(errno)))")
+        }
+        defer { close(fd) }
+
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        "127.0.0.1".withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
+
+        let connectResult = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { pointer in
+                connect(fd, pointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard connectResult == 0 else {
+            throw MCPError.transportError("connect() failed: \(String(cString: strerror(errno)))")
+        }
+
+        // Bound the reads so a broken server fails the test instead of hanging it.
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        _ = payload.withCString { send(fd, $0, strlen($0), 0) }
+
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        let readCount = recv(fd, &buffer, buffer.count, 0)
+        guard readCount > 0 else {
+            throw MCPError.transportError("recv() failed: \(String(cString: strerror(errno)))")
+        }
+        return String(decoding: buffer[0..<readCount], as: UTF8.self)
+    }
+}
+
+@Test("Stdio transport exchanges messages and exits cleanly on client EOF")
+func stdioTransportExchangeAndEOF() async throws {
+    let pair = StdioPair()
+    let server = MCPServer(name: "stdio-test", version: "1.0.0", transport: pair.transport) { Greet() }
+
+    let payload = """
+    {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"probe","version":"1"}}}
+    {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+    """ + "\n"
+    try pair.inputWrite.write(contentsOf: Data(payload.utf8))
+    // Clean EOF — before the F1 fix this ended in ServiceGroupError + SIGTRAP.
+    try pair.inputWrite.close()
+
+    try await server.runService()
+
+    try pair.outputWrite.close()
+    let output = try pair.outputRead.readToEnd() ?? Data()
+    let text = String(decoding: output, as: UTF8.self)
+    #expect(text.contains("\"id\":1"))
+    #expect(text.contains("\"serverInfo\""))
+    #expect(text.contains("\"tools\""))
+    #expect(text.contains("\"greet\""))
+}
+
+@Test("Stdio transport stops cleanly via server stop()")
+func stdioTransportStopsCleanly() async throws {
+    let pair = StdioPair()
+    let server = MCPServer(name: "stdio-test", version: "1.0.0", transport: pair.transport) { Greet() }
+
+    let task = Task { try await server.runService() }
+    try await Task.sleep(nanoseconds: 200_000_000)
+    try await server.stop()
+
+    let result = await task.result
+    #expect(throws: Never.self) { try result.get() }
+
+    try pair.outputWrite.close()
+    _ = try? pair.outputRead.readToEnd()
+}
+
+@Test("TCP transport serves requests over a real socket and stops cleanly")
+func tcpTransportEndToEnd() async throws {
+    let transport = TCPTransport(address: .hostname("127.0.0.1", port: 0))
+    let server = MCPServer(name: "tcp-test", version: "1.0.0", transport: transport) { Greet() }
+
+    let serverTask = Task { try await server.runService() }
+
+    var port: Int?
+    for _ in 0..<50 {
+        if let bound = transport.boundPort {
+            port = bound
+            break
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    guard let port else {
+        Issue.record("TCP server never reported a bound port")
+        try? await server.stop()
+        _ = await serverTask.result
+        return
+    }
+
+    let initialize = try RawSocketClient.request(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"clientInfo\":{\"name\":\"probe\",\"version\":\"1\"}}}\n",
+        port: port
+    )
+    #expect(initialize.contains("\"serverInfo\""))
+    #expect(initialize.contains("\"id\":1"))
+
+    let call = try RawSocketClient.request(
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"greet\",\"arguments\":{\"name\":\"TCP\"}}}\n",
+        port: port
+    )
+    #expect(call.contains("\"Hello, TCP!\""))
+
+    try await server.stop()
+    let result = await serverTask.result
+    #expect(throws: Never.self) { try result.get() }
+}
+
+// MARK: - Default Access Resolver Tests
+
+@Test("Default TCP access resolver grants IPv4 and IPv6 loopback")
+func defaultAccessResolverLoopback() {
+    // Canonical NIO remote-address spellings (verified format with scheme prefix).
+    #expect(TCPTransport.defaultAccessResolver("[IPv4]127.0.0.1:49152") == .admin)
+    #expect(TCPTransport.defaultAccessResolver("[IPv6]::1:49152") == .admin)
+    #expect(TCPTransport.defaultAccessResolver("[IPv6]::ffff:127.0.0.1:49152") == .admin)
+    #expect(TCPTransport.defaultAccessResolver("[IPv4]192.168.1.5:1234") == .public)
+    #expect(TCPTransport.defaultAccessResolver("[IPv6]fd00::1:49152") == .public)
+    // Robustness spellings (bare / bracket-without-scheme) are also accepted.
+    #expect(TCPTransport.defaultAccessResolver("127.0.0.1:49152") == .admin)
+    #expect(TCPTransport.defaultAccessResolver("::1:49152") == .admin)
+    #expect(TCPTransport.defaultAccessResolver("[::1]:49152") == .admin)
+    #expect(TCPTransport.defaultAccessResolver("192.168.1.5:1234") == .public)
+    #expect(TCPTransport.defaultAccessResolver("10.0.0.4:443") == .public)
+}
+
+// MARK: - Registry Fix Tests
+
+@Test("unregister removes instance-registered tools")
+func unregisterRemovesInstanceTool() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]]),
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "greet", "arguments": ["name": "x"]]
+        ]),
+    ]
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
+    server.registerInstance("greet", instance: Greet())
+    server.unregister("greet")
+
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 2)
+    let list = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let tools = (list?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+    #expect(tools?.isEmpty == true)
+
+    let call = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let error = call?["error"] as? [String: Any]
+    #expect(error?["code"] as? Int == -32602)
+}
+
+@Test("Instance-registered tool is invoked through tools/call")
+func instanceRegisteredToolInvocation() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "greet", "arguments": ["name": "Inst"]]
+        ]),
+    ]
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
+    server.registerInstance("greet", instance: Greet())
+
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let content = (response?["result"] as? [String: Any])?["content"] as? [[String: Any]]
+    #expect(content?.first?["text"] as? String == "Hello, Inst!")
+}
+
+@Test("Registry stays consistent under concurrent register/unregister")
+func registryConcurrentStress() async throws {
+    let transport = RunUntilStoppedTransport()
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport) { Greet() }
+    server.register(Greet())
+
+    let serverTask = Task { try await server.runService() }
+    try await Task.sleep(nanoseconds: 100_000_000)
+
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        for taskIndex in 0..<4 {
+            group.addTask {
+                for iteration in 0..<250 {
+                    let name = "transient_\(taskIndex)_\(iteration)"
+                    server.registerInstance(name, instance: Greet())
+                    server.unregister(name)
+                }
+            }
+        }
+        try await group.waitForAll()
+    }
+
+    try await server.stop()
+    let result = await serverTask.result
+    #expect(throws: Never.self) { try result.get() }
+}
+
+/// A transport that keeps running until stopped, for registry stress tests.
+final class RunUntilStoppedTransport: MCPTransport, @unchecked Sendable {
+    private var isRunning = false
+
+    func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
+        isRunning = true
+        while isRunning {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    func stop() async throws {
+        isRunning = false
+    }
+}
+
+// MARK: - Resource Content Shape Tests
+
+struct ResourceTool: MCPTool {
+    static let configuration = MCPToolConfiguration(description: "resource tool")
+    func invoke(context: MCPContext) async throws -> MCPToolResult {
+        .init(content: [.resource(uri: "file:///x", mimeType: nil, text: nil)], isError: false)
+    }
+}
+
+@Test("MCPContent resource encodes the spec's nested EmbeddedResource shape")
+func resourceContentSpecShape() throws {
+    let result = MCPToolResult(content: [.resource(uri: "file:///x", mimeType: "text/plain", text: "hi")], isError: false)
+    let data = try JSONEncoder().encode(result)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let content = json?["content"] as? [[String: Any]]
+    let block = content?.first
+    #expect(block?["type"] as? String == "resource")
+    #expect(block?["uri"] == nil)
+    let resource = block?["resource"] as? [String: Any]
+    #expect(resource?["uri"] as? String == "file:///x")
+    #expect(resource?["mimeType"] as? String == "text/plain")
+    #expect(resource?["text"] as? String == "hi")
+}
+
+@Test("tools/call returns spec-nested resource content over the wire")
+func toolsCallResourceWireShape() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "resourceTool", "arguments": [:]]
+        ]),
+    ]
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
+    server.register(ResourceTool())
+
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let content = (response?["result"] as? [String: Any])?["content"] as? [[String: Any]]
+    let block = content?.first
+    #expect(block?["type"] as? String == "resource")
+    let resource = block?["resource"] as? [String: Any]
+    #expect(resource?["uri"] as? String == "file:///x")
+}
+
+@Test("MCPContent resource decodes the spec-nested shape back")
+func resourceContentSpecDecode() throws {
+    let payload = """
+    {"type":"resource","resource":{"uri":"file:///y","mimeType":"application/json","text":"{}"}}
+    """
+    let data = Data(payload.utf8)
+    let decoded = try JSONDecoder().decode(MCPContent.self, from: data)
+    if case .resource(let uri, let mimeType, let text) = decoded {
+        #expect(uri == "file:///y")
+        #expect(mimeType == "application/json")
+        #expect(text == "{}")
+    } else {
+        Issue.record("Expected a resource content block")
+    }
+}
+
+// MARK: - Codable Parameter Injection Tests
+
+enum LogLevel: String, Codable, Sendable {
+    case debug, info, warning, error
+}
+
+struct Point2D: Codable, Sendable, Equatable {
+    let x: Int
+    let y: Int
+}
+
+@MCPCommand(description: "Codable parameter probe")
+struct CodableProbe {
+    @Option(description: "level") var level: LogLevel = .debug
+    @Option(description: "origin") var origin: Point2D = Point2D(x: 0, y: 0)
+    @Option(description: "opt") var optionalName: String? = nil
+    func run() async throws -> String { "\(level) \(origin.x),\(origin.y) \(optionalName ?? "none")" }
+}
+
+@Test("Custom Codable enum parameters decode from JSON strings")
+func codableEnumParameterInjection() throws {
+    var tool = CodableProbe()
+    try tool.apply(arguments: ["level": "info"])
+    #expect(tool.level == .info)
+}
+
+@Test("Custom Codable struct parameters decode from JSON objects")
+func codableStructParameterInjection() throws {
+    var tool = CodableProbe()
+    try tool.apply(arguments: ["origin": ["x": 3, "y": 4]])
+    #expect(tool.origin == Point2D(x: 3, y: 4))
+}
+
+@Test("Optional parameters clear on JSON null and set on JSON string")
+func codableOptionalParameterInjection() throws {
+    var tool = CodableProbe()
+    try tool.apply(arguments: ["optionalName": "hello"])
+    #expect(tool.optionalName == "hello")
+
+    try tool.apply(arguments: ["optionalName": NSNull()])
+    #expect(tool.optionalName == nil)
+}
+
+@MCPCommand(description: "Void side effect")
+struct VoidSideEffectCommand {
+    func run() { /* side effect only */ }
+}
+
+@Test("MCPCommand with a Void run() yields an empty text block")
+func mcpCommandVoidRunInvocation() async throws {
+    var tool = VoidSideEffectCommand()
+    let result = try await tool.invoke(context: MCPContext(arguments: [:]))
+    #expect(result.isError == false)
+    if case .text(let text) = result.content[0] {
+        #expect(text == "")
+    } else {
+        Issue.record("Expected text content")
+    }
 }

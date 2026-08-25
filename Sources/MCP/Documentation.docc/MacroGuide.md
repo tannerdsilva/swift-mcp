@@ -1,20 +1,27 @@
 # Macro Guide
 
-How the ``@Tool``, ``MCPCommand``, and ``MCPApplication`` macros work, and how to use them effectively.
+How the ``FuncTool``, ``MCPCommand``, ``MCPOptionGroup``, and ``MCPApplication``
+macros work, and how to use them effectively.
 
 ## Overview
 
-swift-mcp provides three Swift macros that generate boilerplate code at compile time:
+swift-mcp provides four Swift macros that generate boilerplate at compile time:
 
-- ``Tool`` — Generates an ``MCPTool``-conforming struct from a plain function
-- ``MCPCommand`` — Generates ``MCPTool`` conformance and optional ``AsyncParsableCommand`` CLI struct
-- ``MCPApplication`` — Generates a complete server entry point with exhaustive dispatch
+- ``FuncTool`` — generates an ``MCPTool``-conforming struct from a static function
+- ``MCPCommand`` — generates an ``MCPTool`` conformance for a struct with a `run()` method
+- ``MCPOptionGroup`` — generates compile-time metadata for an option-group struct
+- ``MCPApplication`` — generates a server entry point with exhaustive dispatch
 
-## @Tool
+All macros are available to consumers through the `MCP` product alone — the
+macros live in the `MCPMacros` target, which the `MCP` library target depends
+on.
+
+## FuncTool
 
 ### What It Does
 
-Applied to a function, ``Tool`` generates a struct named ``{FunctionName}Tool`` that conforms to ``MCPTool``.
+Applied to a function, ``FuncTool`` generates a struct named
+`{FunctionName}Tool` (e.g. `greetTool`) that conforms to ``MCPTool``.
 
 ### Parameter Classification
 
@@ -24,98 +31,126 @@ The macro automatically classifies function parameters:
 |---|---|---|
 | No default value | Required argument | ``@Argument`` |
 | Has default value, non-Bool | Optional option | ``@Option`` |
-| Bool with default ``false`` | Flag | ``@Flag`` |
+| Bool with default `false` | Flag | ``@Flag`` |
 
 ### Parameters
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| ``description`` | ``String`` | ``\"\"`` | Human-readable description |
-| ``name`` | ``String?`` | ``nil`` | Explicit tool name (defaults to function name) |
-| ``requiredAccess`` | ``AccessLevel`` | ``.public`` | Minimum access level |
+| `description` | `String` | `""` | Human-readable description |
+| `name` | `String?` | `nil` | Explicit tool name (defaults to function name) |
+| `requiredAccess` | `AccessLevel` | `.public` | Minimum access level |
 
-### Example
+### Scope Constraint
+
+``FuncTool`` is a *peer* macro that introduces a new type at its attachment
+scope. Because peer macros are not allowed to introduce arbitrary names at
+global scope, the annotated function must be nested inside a type — and
+because the generated `run()` calls it unqualified, it must be `static`:
 
 ```swift
-@Tool(description: "Greet someone by name")
-func greet(name: String, count: Int = 1, formal: Bool = false) -> String {
-    let greeting = formal ? "Greetings" : "Hello"
-    return "\(greeting), \(name)!"
+enum MyTools {
+    @FuncTool(description: "Greet someone by name")
+    static func greet(name: String, count: Int = 1, formal: Bool = false) -> String {
+        let greeting = formal ? "Greetings" : "Hello"
+        return "\(greeting), \(name)!"
+    }
 }
 
 let server = MCPServer(name: "demo", version: "1.0.0") {
-    greetTool()
+    MyTools.greetTool()
 }
 try await server.runService()
 ```
 
-### Generated Code
+Applying the macro to a non-`static` instance method (or at file scope, which
+the compiler rejects outright) fails with a diagnostic.
 
-For the function above, the macro generates:
+### Return Types
 
-```swift
-public struct greetTool: MCPTool {
-    @Argument var name: String = ""
-    @Option var count: Int = 1
-    @Flag var formal: Bool = false
+Any return type is supported. The generated struct's `run()` returns the
+annotated function's declared type, and `invoke` renders the value to text via
+`String(describing:)` — exactly like ``MCPCommand``. A function that returns
+`Void` produces an empty text block. Errors thrown by the function surface as
+JSON-RPC `-32603` errors.
 
-    public static var configuration: MCPToolConfiguration {
-        MCPToolConfiguration(description: "Greet someone by name")
-    }
+### Parameter Constraints
 
-    public func run() -> String {
-        return greet(name: name, count: count, formal: formal)
-    }
+Every parameter must carry an external label. `_`-labeled, `inout`, and
+variadic parameters are rejected with a diagnostic: they cannot be addressed
+as JSON-valued MCP arguments. `@FuncTool` parameters carry no per-parameter
+descriptions or enum constraints (use ``MCPCommand`` on a struct when you need
+those).
 
-    public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
-        let output = run()
-        return .text(String(describing: output))
-    }
-}
-```
-
-## @MCPCommand
+## MCPCommand
 
 ### What It Does
 
-Applied to a struct, ``MCPCommand`` generates:
+Applied to a struct, ``MCPCommand`` generates an ``MCPTool`` conformance in an
+extension:
 
-1. **``MCPTool`` conformance** — ``configuration`` property and ``invoke(context:)`` method that calls the user's ``run()``
-2. **``AsyncParsableCommand`` conformance** — A nested ``CLI`` struct with the same properties, enabling command-line invocation
+1. A static ``MCPToolConfiguration``.
+2. A static `discoverParameters()` returning compile-time parameter metadata.
+3. `apply(arguments:)` and `invoke(context:)` that call through to the user's
+   `run()`, detecting its signature at compile time.
+
+The struct must declare exactly one `run()` method. `async`, `throws`, both,
+or neither are all supported; the generated `invoke` applies the matching
+`try`/`await` prefix so no spurious warnings are emitted for non-throwing
+`run()` methods. The `run()` return value is rendered via `String(describing:)`
+so any return type works.
 
 ### Parameter Wrappers
 
-| Wrapper | MCP Behavior | CLI Behavior |
-|---|---|---|
-| ``@Argument`` | Required positional parameter | Required positional argument |
-| ``@Option`` | Optional named parameter with default | Optional named option with default |
-| ``@Flag`` | Boolean flag, defaults to false | Boolean flag, defaults to false |
-| ``@OptionGroup`` | Nested parameter group | Nested option group |
+| Wrapper | MCP Behavior |
+|---|---|
+| `@Argument` | Required parameter |
+| `@Option` | Optional parameter with default value |
+| `@Flag` | Boolean flag, defaults to false |
+| `@OptionGroup` | Nested parameter group, flattened at compile time |
 
-All wrappers support the ``enumValues:`` parameter to constrain allowed values in the JSON Schema:
+All wrappers support the `enumValues:` parameter to constrain allowed values in
+the JSON Schema:
 
 ```swift
 @Argument(description: "Log level", enumValues: ["debug", "info", "warning", "error"])
 var level: String = ""
 ```
 
-### Async Detection
+### Run-Signature Detection
 
-The macro detects whether your ``run()`` method is async or sync and generates the appropriate ``invoke``:
+The macro reads the declared `run()` signature at compile time and emits only
+the matching `try`/`await` prefix — never an unconditional one — so
+non-throwing commands generate no spurious warnings:
 
 ```swift
-// Sync run()
+// Sync, non-throwing
+func run() -> String { "Hello" }
+// Generates: let output = run()
+
+// Sync, throwing
 func run() throws -> String { "Hello" }
 // Generates: let output = try run()
 
-// Async run()
-func run() async throws -> String { try await fetch() }
+// Async, non-throwing
+func run() async -> String { "Hello" }
+// Generates: let output = await run()
+
+// Async, throwing
+func run() async throws -> String { "Hello" }
 // Generates: let output = try await run()
+
+// Void (any of the above shapes): produces an empty text block
+func run() { /* side effect */ }
+// Generates: run(); return .text("")
 ```
+
+Exactly one `run()` method is required; zero or multiple overloads fail with a
+diagnostic rather than silently picking one.
 
 ### Access Control
 
-The macro supports a ``requiredAccess`` parameter:
+The macro supports a `requiredAccess` parameter:
 
 ```swift
 @MCPCommand(description: "Admin operation", requiredAccess: .admin)
@@ -124,7 +159,8 @@ struct AdminOp {
 }
 ```
 
-This generates ``MCPToolConfiguration(requiredAccess: .admin)``, which the server uses to filter and enforce access.
+This generates `MCPToolConfiguration(requiredAccess: .admin)`, which the server
+uses to filter and enforce access.
 
 ### Expansion Example
 
@@ -141,27 +177,57 @@ extension Greet: MCPTool {
     public static var configuration: MCPToolConfiguration {
         MCPToolConfiguration(description: "Greet someone")
     }
+    public static func discoverParameters() -> [MCPParameterInfo] { ... }
+    public mutating func apply(arguments: [String: Any]) throws { ... }
     public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
         let output = try run()
         return .text(String(describing: output))
     }
 }
-// Plus CLI struct for ArgumentParser...
 ```
 
-## @MCPApplication
+### Requirements
+
+- Applied to **structs** only.
+- The struct must have a `run()` method (sync or async; throwing or not).
+- Properties must use ``@Argument``, ``@Option``, ``@Flag``, or
+  ``@OptionGroup``.
+
+## MCPOptionGroup
+
+Applied to an option-group struct, ``MCPOptionGroup`` synthesizes a
+``StaticMCPGroup`` conformance: static `mcpParameters` metadata and an
+`mcpApply(arguments:)` method. The parent ``MCPCommand`` conformance inlines
+the group's parameters at compile time.
+
+```swift
+@MCPOptionGroup
+struct SharedOptions {
+    @Option(description: "Verbose output") var verbose: Bool = false
+    @Option(description: "Output path")    var outputPath: String = "."
+}
+```
+
+Groups are shallow — nested ``@OptionGroup`` properties are rejected with a
+compiler diagnostic.
+
+## MCPApplication
 
 ### What It Does
 
 Applied to a struct with ``@Tool`` properties, ``MCPApplication`` generates:
 
-1. **``MCPToolID`` enum** — One case per ``@Tool`` property, providing compile-time unique tool names
-2. **Exhaustive dispatch** — A ``callTool`` method with a switch over the enum, each branch using the concrete tool type
-3. **``main()`` entry point** — Creates the server, registers tools, and runs via ``ServiceGroup``
+1. **``MCPToolID`` enum** — one case per ``@Tool`` property, providing
+   compile-time unique tool names.
+2. **Exhaustive dispatch** — a `callTool` method with a switch over the enum,
+   each branch using the concrete tool type.
+3. **`main()` entry point** — creates the server, registers every `@Tool`, and
+   runs via ``MCPServer/runService()``.
 
 ### Usage
 
 ```swift
+@main
 @MCPApplication(name: "demo", version: "1.0.0")
 struct MyApp {
     @Tool var greet = Greet()
@@ -169,15 +235,18 @@ struct MyApp {
 }
 ```
 
+> The generated `static func main()` is only invoked when the struct is also
+> annotated with `@main`.
+
 ### Conditional Registration
 
-Use the ``available`` parameter for debug-only tools:
+Use the `available` parameter for debug-only tools:
 
 ```swift
 @Tool(available: .debug) var debug = DebugTool()
 ```
 
-The macro wraps registration and dispatch in ``#if DEBUG``.
+The macro wraps registration and dispatch in `#if DEBUG`.
 
 ### Address Binding
 
@@ -191,23 +260,39 @@ Pass an address to bind to a specific network interface:
 )
 ```
 
+### Custom Transport
+
+Pass a ``MCPTransport`` value to use a custom transport instead of stdio.
+Specify either `address` or `transport`, never both:
+
+```swift
+@MCPApplication(
+    name: "demo",
+    version: "1.0.0",
+    transport: TCPTransport(address: .localhostIPv4(port: 8080))
+)
+```
+
 ## Macro Implementation Details
 
-Both macros are implemented using SwiftSyntax and run as compiler plugins. The implementation target is ``MCPMacros``, which is separate from the main ``MCP`` library to avoid runtime dependencies on SwiftSyntax.
+Both macros are implemented using SwiftSyntax and run as compiler plugins. The
+implementation target `MCPMacros` is separate from the main `MCP` library to
+avoid runtime dependencies on SwiftSyntax.
 
 ### MCPCommandMacro
 
-- Type: ``ExtensionMacro``
-- Reads: ``@Argument``, ``@Option``, ``@Flag``, ``@OptionGroup`` property wrappers
-- Generates: ``MCPTool`` extension with ``configuration`` and ``invoke``
-- Detects: Async ``run()`` via signature inspection
+- Type: `ExtensionMacro`
+- Reads: `@Argument`, `@Option`, `@Flag`, `@OptionGroup` property wrappers
+- Generates: ``MCPTool`` extension with `configuration`, `discoverParameters()`,
+  `apply(arguments:)`, and `invoke(context:)`
+- Detects: the `run()` signature (async, throws, and `Void` return) via signature inspection
 
 ### MCPApplicationMacro
 
-- Type: ``MemberMacro``
-- Reads: ``@Tool`` properties
-- Generates: ``ToolID`` enum, ``callTool`` dispatch, ``main()``
-- Supports: ``available`` parameter, ``address`` parameter
+- Type: `MemberMacro`
+- Reads: `@Tool` properties
+- Generates: `ToolID` enum, `callTool` dispatch, `main()`
+- Supports: `available` parameter, `address` parameter, `transport` parameter
 
 ## Related Articles
 

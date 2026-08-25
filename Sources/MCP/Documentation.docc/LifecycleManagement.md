@@ -27,11 +27,21 @@ try await server.runService()
 // SIGTERM or SIGINT triggers graceful shutdown
 ```
 
-This creates a ``ServiceGroup`` with the server as the only service, configures signal handling for SIGTERM and SIGINT, and runs until a signal is received.
+This creates a ``ServiceGroup`` with the server as the only service, configures
+signal handling for SIGTERM and SIGINT, and configures the server service with
+``.gracefullyShutdownGroup`` success termination — so the process exits cleanly
+both when a signal is received and when the transport completes on its own
+(client EOF on stdio, or listener close on TCP). ``runService()`` returns
+normally in both cases.
 
 ### Custom ServiceGroup
 
-For full control, create your own ``ServiceGroup``:
+For full control, create your own ``ServiceGroup``. When you want a standalone
+process that exits when the MCP session ends, give the server the same
+``.gracefullyShutdownGroup`` success behavior ``runService()`` uses; a host
+that should keep running after the session ends can instead use ``.ignore``
+(or the default ``.cancelGroup``, which surfaces a completed session as an
+error).
 
 ```swift
 let server = MCPServer(name: "demo", version: "1.0.0") {
@@ -39,7 +49,12 @@ let server = MCPServer(name: "demo", version: "1.0.0") {
 }
 let serviceGroup = ServiceGroup(
     configuration: ServiceGroupConfiguration(
-        services: [server],
+        services: [
+            ServiceGroupConfiguration.ServiceConfiguration(
+                service: server,
+                successTerminationBehavior: .gracefullyShutdownGroup
+            )
+        ],
         gracefulShutdownSignals: [.sigterm, .sigint, .sighup],
         logger: server.logger
     )
@@ -69,22 +84,33 @@ try await serviceGroup.run()
 
 ## Shutdown Behavior
 
-When a signal is received:
+A ``ServiceGroup`` shuts its services down in reverse declaration order. For
+the MCP server:
 
-1. ``ServiceGroup`` sends a shutdown signal to all services
-2. Services stop in reverse declaration order
-3. Each service's ``run()`` method returns
-4. Resources are cleaned up
+- **Signal-initiated shutdown**: the graceful-shutdown handler registered in
+  ``MCPServer/run()`` calls ``MCPTransport/stop()`` on the transport.
+- **Transport completion**: when the transport finishes on its own — client
+  EOF on the stdio pipe, or the TCP listener closing — the server's `run()`
+  returns and the group applies the service's success termination behavior.
 
 For the MCP server specifically:
 
-- **StdioTransport**: The read loop exits on the next iteration
-- **TCPTransport**: The listening channel is closed, active connections are drained
-- **Registered tools**: No explicit cleanup needed (tools are value types)
+- **StdioTransport**: the poll-based read loop observes the stop flag within
+  one poll interval (250 ms), so shutdown is prompt even while the peer is
+  silent. A clean client EOF ends the read loop gracefully — the server
+  completes instead of crashing with an "unexpected finish" error.
+- **TCPTransport**: the listening channel is closed; the server stops accepting
+  and ``MCPServer/run()`` returns.
+- **Registered tools**: no explicit cleanup needed (tools are value types).
 
-## Transport as a Child Service
+## Transport Lifecycle
 
-Internally, ``MCPServer.run()`` wraps the transport in a ``ClosureService`` and runs it as a child of an internal ``ServiceGroup``. This ensures the transport's lifecycle is managed alongside the server's.
+``MCPServer/run()`` drives the transport directly — it is not wrapped in a
+nested ``ServiceGroup``. A graceful-shutdown handler around the transport's
+``start(handler:)`` fans ``MCPTransport/stop()`` out to the transport, so any
+transport can unwind promptly on shutdown. ``runService()`` owns the outermost
+``ServiceGroup`` and its termination behavior; hosts embedding the server in
+their own group configure that behavior themselves (see above).
 
 ## Related Articles
 

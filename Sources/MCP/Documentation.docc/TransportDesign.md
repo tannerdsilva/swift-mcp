@@ -27,8 +27,13 @@ public protocol MCPTransport: Sendable {
 
 Reads newline-delimited JSON from stdin and writes to stdout. The caller is always ``.root`` with source address ``"stdio"``. This is the default transport and is suitable for CLI-based MCP servers launched as subprocesses.
 
+The read loop is poll-based with a short (250 ms) bounded timeout, so
+``stop()``-initiated shutdown is prompt even while the peer is silent, and a
+clean client EOF ends the loop gracefully — the server completes instead of
+crashing.
+
 ```swift
-let transport = StdioTransport()
+let transport = StdioTransport(logger: logger)
 ```
 
 ### TCPTransport
@@ -39,12 +44,25 @@ Listens for TCP connections and communicates using newline-delimited JSON. Suppo
 let transport = TCPTransport(
     address: .hostname("127.0.0.1", port: 8080),
     accessResolver: { address in
-        address.hasPrefix("127.0.0.1") ? .admin : .public
+        address.hasPrefix("[IPv4]127.0.0.1") ? .admin : .public
     }
 )
 ```
 
-The ``TCPTransport`` accepts an ``accessResolver`` closure that maps source IP addresses to ``AccessLevel`` values. This is resolved once per connection and stamped on every message from that connection.
+The ``TCPTransport`` accepts an ``accessResolver`` closure that maps source
+addresses to ``AccessLevel`` values. This is resolved once per connection and
+stamped on every message from that connection.
+
+> The resolver receives NIO's socket description string, which includes a
+> scheme prefix and the port — for example `[IPv4]127.0.0.1:54321` for IPv4
+> and `[IPv6]::1:54321` for IPv6 (IPv4-mapped IPv6 renders as
+> `[IPv6]::ffff:127.0.0.1:54321`). Match against the prefix form shown above
+> rather than the bare address.
+>
+> The default resolver is ``TCPTransport/defaultAccessResolver(_:)``: it grants
+> ``AccessLevel/admin`` to loopback callers (IPv4, IPv6, and IPv4-mapped IPv6,
+> in both the canonical and bare spellings) and ``AccessLevel/public`` to
+> everyone else.
 
 #### Address Types
 

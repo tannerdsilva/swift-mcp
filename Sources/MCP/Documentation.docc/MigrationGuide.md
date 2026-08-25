@@ -6,6 +6,62 @@ How to migrate from earlier versions of swift-mcp.
 
 This guide covers breaking changes between versions and how to update your code.
 
+## Upgrading to 1.2.0
+
+### Tool-Creation and Codegen Changes
+
+- ``MCPCommand`` now requires **exactly one** `run()` method (zero or multiple
+  overloads are a diagnostic). Non-throwing `run()` methods no longer generate
+  an unconditional `try`, and a `Void` `run()` produces an empty text block
+  instead of `"()"` — both macros now agree.
+- ``FuncTool`` supports **any return type** (rendered via `String(describing:)`),
+  `Void` returns produce an empty text block, and `_`-labeled, `inout`, and
+  variadic parameters are rejected with diagnostics. The wrapped function must
+  be `static` and nested in a type (the global-scope case was never compilable).
+- Property wrappers decode **custom `Codable & Sendable` parameter types**
+  (enums, structs, optionals), so a JSON object now injects into a `Codable`
+  struct parameter instead of failing with a type mismatch.
+
+### Server Behavior Changes
+
+- ``MCPServer/runService()`` returns normally when the transport completes
+  (client EOF on stdio). Previously the process crashed with
+  `ServiceGroupError: A service has finished unexpectedly`. Hosts embedding
+  ``MCPServer`` in their own ``ServiceGroup`` now choose the
+  `successTerminationBehavior` (`cancelGroup`, `gracefullyShutdownGroup`, or
+  `ignore`).
+- ``MCPServer/unregister(_:)`` also removes instance-registered tools, and
+  instance-registered tools are access-filtered and enforced exactly like
+  type-registered ones.
+- `MCPContent.resource` encodes the spec's nested `EmbeddedResource` shape
+  (`{"type":"resource","resource":{...}}`) instead of the old flat shape.
+- ``TCPTransport/defaultAccessResolver(_:)`` (the default resolver) matches the
+  NIO address format including the scheme prefix, so IPv4 and IPv6 loopback
+  callers resolve to ``AccessLevel/admin``.
+
+## Upgrading to 1.1.0
+
+### Dual-Use CLI Code Generation Removed
+
+Earlier versions of ``MCPCommand`` generated a nested `CLI` struct conforming
+to `AsyncParsableCommand` behind an `#if canImport(ArgumentParser)` guard.
+That path was dropped because the generated code could never compile: the MCP
+wrapper names collide with ArgumentParser's, and the MCP library does not
+depend on ArgumentParser.
+
+**What changed**: ``MCPCommand`` now generates only the ``MCPTool``
+conformance. Remove any `import ArgumentParser` and references to
+`YourType.CLI`.
+
+**If you need a CLI**: declare the command's argument surface as its own
+`AsyncParsableCommand` struct and share the underlying logic with your
+``MCPTool`` implementation — the MCP wrappers and ArgumentParser wrappers are
+independent types and are not interchangeable.
+
+### Everything Else Unchanged
+
+All other APIs from 1.0.0 are unchanged in 1.1.0.
+
 ## Migrating to 1.0.0
 
 ### @Param Replaced by @Argument, @Option, @Flag

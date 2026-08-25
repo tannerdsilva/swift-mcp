@@ -81,37 +81,58 @@ public struct MCPCommandMacro: ExtensionMacro {
         let toolName = extractStringArgument(from: node, name: "name")
         let requiredAccess = extractAccessArgument(from: node)
         let properties = extractProperties(from: declaration)
-        let isAsyncRun = detectAsyncRun(in: declaration)
+        let runSignature = try detectRun(in: declaration)
 
         let extensionDecl = generateExtension(
             structName: structName,
             description: description,
             toolName: toolName,
             properties: properties,
-            isAsyncRun: isAsyncRun,
+            runSignature: runSignature,
             requiredAccess: requiredAccess
         )
 
         return [extensionDecl]
     }
 
-    // MARK: - Async Run Detection
+    // MARK: - Run Signature Detection
 
-    /// Detects whether the user's `run()` method is async or sync.
+    /// The async/throws shape of the annotated struct's `run()` method.
+    struct RunSignature {
+        let isAsync: Bool
+        let isThrowing: Bool
+        /// Whether `run()` returns `Void` (or has no return clause).
+        let isVoid: Bool
+    }
+
+    /// Detects the signature of the user's `run()` method.
     ///
-    /// Looks for a `func run(...)` declaration in the struct's member block
-    /// and checks if it has the `async` keyword in its signature.
-    static func detectAsyncRun(in declaration: some DeclGroupSyntax) -> Bool {
-        for member in declaration.memberBlock.members {
-            guard let funcDecl = member.decl.as(FunctionDeclSyntax.self) else { continue }
-            guard funcDecl.name.text == "run" else { continue }
-            // Check for async specifier in the signature
-            if let effectSpecifiers = funcDecl.signature.effectSpecifiers {
-                return effectSpecifiers.asyncSpecifier != nil
-            }
-            return false
+    /// Requires exactly one `run()` declaration; zero or multiple overloads are
+    /// ambiguous and fail loudly instead of mis-detecting the first one found.
+    static func detectRun(in declaration: some DeclGroupSyntax) throws -> RunSignature {
+        let runFunctions = declaration.memberBlock.members.compactMap { member -> FunctionDeclSyntax? in
+            guard let funcDecl = member.decl.as(FunctionDeclSyntax.self), funcDecl.name.text == "run" else { return nil }
+            return funcDecl
         }
-        return false
+
+        guard !runFunctions.isEmpty else {
+            throw MacroError.message("@MCPCommand requires a run() method on the annotated struct")
+        }
+        guard runFunctions.count == 1 else {
+            throw MacroError.message("@MCPCommand requires exactly one run() method (found \(runFunctions.count))")
+        }
+
+        let signature = runFunctions[0].signature
+        let isAsync = signature.effectSpecifiers?.asyncSpecifier != nil
+        let isThrowing = signature.effectSpecifiers?.throwsClause?.throwsSpecifier != nil
+        let isVoid: Bool
+        if let returnClause = signature.returnClause {
+            let typeName = trimmed(returnClause.type.description)
+            isVoid = typeName == "Void" || typeName == "()"
+        } else {
+            isVoid = true
+        }
+        return RunSignature(isAsync: isAsync, isThrowing: isThrowing, isVoid: isVoid)
     }
 
     // MARK: - Property Extraction
@@ -176,15 +197,33 @@ public struct MCPCommandMacro: ExtensionMacro {
         description: String,
         toolName: String?,
         properties: [PropertyInfo],
-        isAsyncRun: Bool,
+        runSignature: RunSignature,
         requiredAccess: String? = nil
     ) -> ExtensionDeclSyntax {
         let nameArg = toolName.map { ", name: \"\($0)\"" } ?? ""
         let accessArg = requiredAccess.map { ", requiredAccess: \($0)" } ?? ""
 
-        // Generate the invoke method — calls run() with or without await
-        // Note: the outer `try` is already in the template below
-        let invokeCall = isAsyncRun ? "await run()" : "run()"
+        // Only emit `try`/`await` when the user's run() is actually throwing or
+        // async — an unconditional prefix generates warnings for every
+        // non-throwing run() (the sync and async non-throwing cases).
+        let tryPrefix = runSignature.isThrowing ? "try " : ""
+        let awaitPrefix = runSignature.isAsync ? "await " : ""
+        let invokeCall = "\(tryPrefix)\(awaitPrefix)run()"
+
+        // A Void return mimics ``FuncTool``: an empty text block instead of
+        // String(describing:)'s "()".
+        let invokeBody: String
+        if runSignature.isVoid {
+            invokeBody = """
+                        \(invokeCall)
+                        return .text("")
+            """
+        } else {
+            invokeBody = """
+                        let output = \(invokeCall)
+                        return .text(String(describing: output))
+            """
+        }
 
         let discoveryExpression = generateDiscoveryExpression(properties: properties)
         let applyBody = generateApplyBody(properties: properties)
@@ -203,83 +242,17 @@ public struct MCPCommandMacro: ExtensionMacro {
             }
 
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
-                let output = try \(invokeCall)
-                return .text(String(describing: output))
+            \(invokeBody)
             }
             """
-
-        let cliStruct = buildCLIStruct(structName: structName, properties: properties, isAsyncRun: isAsyncRun)
 
         let source: DeclSyntax = """
         extension \(raw: structName): MCPTool {
         \(raw: mcpMembers)
-        \(raw: cliStruct)
         }
         """
 
         return source.cast(ExtensionDeclSyntax.self)
-    }
-
-    // MARK: - CLI Struct
-
-    static func buildCLIStruct(structName: String, properties: [PropertyInfo], isAsyncRun: Bool) -> String {
-        var memberDeclarations: [String] = []
-        var initArgs: [String] = []
-
-        for prop in properties {
-            switch prop.wrapperKind {
-            case .argument:
-                let descAttr = prop.description.map { "description: \"\($0)\"" } ?? ""
-                let wrapperAttr = descAttr.isEmpty ? "@Argument" : "@Argument(\(descAttr))"
-                let defaultValue = prop.hasInitializer ? "" : " = \(defaultValueForType(prop.type))"
-                memberDeclarations.append("\(wrapperAttr) var \(prop.name): \(prop.type)\(defaultValue)")
-                initArgs.append("\(prop.name): \(prop.name)")
-
-            case .option:
-                let descAttr = prop.description.map { "description: \"\($0)\"" } ?? ""
-                let wrapperAttr = descAttr.isEmpty ? "@Option" : "@Option(\(descAttr))"
-                let defaultValue = prop.initializerExpr.map { " = \($0)" } ?? " = \(defaultValueForType(prop.type))"
-                memberDeclarations.append("\(wrapperAttr) var \(prop.name): \(prop.type)\(defaultValue)")
-                initArgs.append("\(prop.name): \(prop.name)")
-
-            case .flag:
-                let descAttr = prop.description.map { "description: \"\($0)\"" } ?? ""
-                let wrapperAttr = descAttr.isEmpty ? "@Flag" : "@Flag(\(descAttr))"
-                let defaultValue = prop.initializerExpr.map { " = \($0)" } ?? " = false"
-                memberDeclarations.append("\(wrapperAttr) var \(prop.name): \(prop.type)\(defaultValue)")
-                initArgs.append("\(prop.name): \(prop.name)")
-
-            case .optionGroup:
-                memberDeclarations.append("@OptionGroup var \(prop.name): \(prop.type)")
-                initArgs.append("\(prop.name): \(prop.name)")
-            }
-        }
-
-        let paramArgs = initArgs.joined(separator: ", ")
-        let parentInit = properties.isEmpty
-            ? "\(structName)()"
-            : "\(structName)(\(paramArgs))"
-
-        let members = memberDeclarations.joined(separator: "\n            ")
-
-        // CLI run() mirrors the user's sync/async choice
-        // Note: the outer `try` is already in the template below
-        let cliRunCall = isAsyncRun ? "await command.run()" : "command.run()"
-        let cliRunModifier = isAsyncRun ? "async " : ""
-
-        return """
-            #if canImport(ArgumentParser)
-            struct CLI: AsyncParsableCommand {
-                \(members)
-
-                mutating func run() \(cliRunModifier)throws {
-                    let command = \(parentInit)
-                    let result = try \(cliRunCall)
-                    print(result)
-                }
-            }
-            #endif
-            """
     }
 }
 

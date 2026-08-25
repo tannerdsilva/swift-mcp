@@ -3,7 +3,7 @@
 // This source file is part of the MCP open source project
 //
 // Copyright (c) 2024 and the MCP project authors
-// Licensed under Apache License v2.0
+// Licensed under the MIT License
 //
 // See LICENSE.txt for license information
 //
@@ -11,8 +11,8 @@
 
 /// Configuration metadata for an MCP tool.
 ///
-/// This is the MCP analogue of `CommandConfiguration` from Swift Argument Parser.
-/// Provide a configuration as the `configuration` property of your `MCPTool` type.
+/// Provide a configuration as the `configuration` property of your `MCPTool`
+/// type.
 ///
 /// ```swift
 /// struct Greet: MCPTool {

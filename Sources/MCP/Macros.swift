@@ -3,32 +3,39 @@
 // This source file is part of the MCP open source project
 //
 // Copyright (c) 2024 and the MCP project authors
-// Licensed under Apache License v2.0
+// Licensed under the MIT License
 //
 // See LICENSE.txt for license information
 //
 //===----------------------------------------------------------------------===//
 
-/// A macro that generates dual `AsyncParsableCommand` and `MCPTool` conformances
-/// from a single struct declaration.
+/// A macro that generates an ``MCPTool`` conformance from a single struct declaration.
 ///
 /// Apply this macro to a struct that uses `@Argument`, `@Option`, `@Flag`, and
 /// `@OptionGroup` property wrappers and defines a `run()` method. The macro
 /// generates:
 ///
-/// 1. An extension adding `MCPTool` conformance for MCP server use
-/// 2. A nested `CLI` type conforming to `AsyncParsableCommand` for CLI use
-///    (requires `import ArgumentParser` in the client file)
+/// 1. A static ``MCPToolConfiguration``.
+/// 2. A static ``MCPTool/discoverParameters()`` returning compile-time
+///    parameter metadata.
+/// 3. ``MCPTool/apply(arguments:)`` and ``MCPTool/invoke(context:)`` that
+///    call through to the user's `run()`.
 ///
-/// The wrapper mapping is 1:1 and transparent:
-///   `@Argument`   → `@Argument`   / `@Argument` (MCP)
-///   `@Option`     → `@Option`     / `@Option` (MCP)
-///   `@Flag`       → `@Flag`       / `@Flag` (MCP)
-///   `@OptionGroup` → `@OptionGroup` / `@OptionGroup` (MCP)
+/// The struct must declare **exactly one** `run()` method. Its signature is
+/// detected at compile time: `async`, `throws`, both, or neither are all
+/// supported, and the generated `invoke` applies the matching `try`/`await`
+/// prefix — never an unconditional one. The `run()` return value is rendered
+/// to text via `String(describing:)`, so any return type works; throwing
+/// functions surface errors as JSON-RPC `-32603`.
 ///
-/// Usage with individual wrappers:
+/// The wrapper mapping is 1:1 and transparent with the parameter kinds:
+///   `@Argument` → ``MCPParamKind/argument`` (required)
+///   `@Option`   → ``MCPParamKind/option``   (optional, has default value)
+///   `@Flag`     → ``MCPParamKind/flag``     (Boolean)
+///   `@OptionGroup` → flattened via generated ``StaticMCPGroup`` metadata
+///
+/// Usage:
 /// ```swift
-/// import ArgumentParser
 /// import MCP
 ///
 /// @MCPCommand(description: "Greet someone by name")
@@ -44,14 +51,15 @@
 ///
 ///     func run() async throws -> String {
 ///         let greeting = formal ? "Greetings" : "Hello"
-///         return Array(repeating: "\\(greeting), \\(name)!", count: count)
-///             .joined(separator: "\\n")
+///         return Array(repeating: "\(greeting), \(name)!", count: count)
+///             .joined(separator: "\n")
 ///     }
 /// }
 /// ```
 ///
 /// Usage with option groups:
 /// ```swift
+/// @MCPOptionGroup
 /// struct SharedOptions {
 ///     @Option(description: "Verbose output")
 ///     var verbose: Bool = false
@@ -68,11 +76,6 @@
 /// }
 /// ```
 ///
-/// The generated `CLI` type can be used as a root command:
-/// ```swift
-/// Greet.CLI.main()
-/// ```
-///
 /// The generated `MCPTool` conformance allows the struct to be registered
 /// directly with an `MCPServer`:
 /// ```swift
@@ -80,7 +83,7 @@
 ///     Greet()
 /// }
 /// ```
-@attached(extension, conformances: MCPTool, names: named(configuration), named(invoke), named(CLI), named(discoverParameters), named(apply))
+@attached(extension, conformances: MCPTool, names: named(configuration), named(invoke), named(discoverParameters), named(apply))
 public macro MCPCommand(
     description: String = "",
     name: String? = nil,
@@ -175,6 +178,22 @@ public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOp
 /// }
 /// ```
 ///
+/// ## Custom Transport
+///
+/// Pass a ``MCPTransport`` value to use a custom transport instead of the
+/// default stdio transport. Specify either `address` or `transport`, not both:
+///
+/// ```swift
+/// @MCPApplication(
+///     name: "demo",
+///     version: "1.0.0",
+///     transport: TCPTransport(address: .localhostIPv4(port: 8080))
+/// )
+/// struct MyApp {
+///     @Tool var greet = Greet()
+/// }
+/// ```
+///
 /// ## Generated Code
 ///
 /// For the basic example above, the macro generates:
@@ -214,10 +233,10 @@ public macro MCPApplication(
     transport: (any MCPTransport)? = nil
 ) = #externalMacro(module: "MCPMacros", type: "MCPApplicationMacro")
 
-/// A macro that generates an ``MCPTool``-conforming struct from a function.
+/// A macro that generates an ``MCPTool``-conforming struct from a static function.
 ///
-/// Apply this macro to a function to automatically create an MCP tool.
-/// The function's parameters become tool parameters:
+/// Apply this macro to a `static` function on a type to automatically create an
+/// MCP tool. The function's parameters become tool parameters:
 ///
 /// - Parameters **without** default values → ``Argument`` (required)
 /// - Parameters **with** default values → ``Option`` (optional)
@@ -227,17 +246,41 @@ public macro MCPApplication(
 /// with an ``MCPServer``.
 ///
 /// ```swift
-/// @FuncTool(description: "Greet someone by name")
-/// func greet(name: String, count: Int = 1, formal: Bool = false) -> String {
-///     let greeting = formal ? "Greetings" : "Hello"
-///     return "\\(greeting), \\(name)!"
+/// enum MyTools {
+///     @FuncTool(description: "Greet someone by name")
+///     static func greet(name: String, count: Int = 1, formal: Bool = false) -> String {
+///         let greeting = formal ? "Greetings" : "Hello"
+///         return "\(greeting), \(name)!"
+///     }
 /// }
 ///
 /// let server = MCPServer(name: "demo", version: "1.0.0") {
-///     greetTool()
+///     MyTools.greetTool()
 /// }
 /// try await server.runService()
 /// ```
+///
+/// ## Scope constraint
+///
+/// ``FuncTool`` is a *peer* macro that introduces a new type at its attachment
+/// scope. Because the compiler does not allow peer macros to introduce arbitrary
+/// names at global scope, the annotated function must be a member of a type —
+/// and because the generated `run()` calls it unqualified, it must be `static`
+/// (instance methods cannot be wrapped). A function annotated at file scope is
+/// rejected by the compiler itself.
+///
+/// ## Return types
+///
+/// Any return type is supported. The generated `run()` returns the function's
+/// declared type and `invoke` renders the value to text via
+/// `String(describing:)`. Functions that return `Void` produce an empty text
+/// block. Errors thrown by the function surface as JSON-RPC `-32603` errors.
+///
+/// ## Parameter constraints
+///
+/// Every parameter must carry a label (no `_`-labeled parameters), and `inout`
+/// and variadic parameters are rejected with a diagnostic — these cannot be
+/// addressed as JSON-valued MCP arguments.
 @attached(peer, names: arbitrary)
 public macro FuncTool(
     description: String = "",

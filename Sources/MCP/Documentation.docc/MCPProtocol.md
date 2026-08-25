@@ -176,9 +176,24 @@ Sent by the client to cancel a pending request. Acknowledged (no response).
 
 | Code | Meaning |
 |---|---|
+| -32700 | Parse error (a frame that is not valid JSON-RPC) |
+| -32000 | Access denied (`tools/call` for a tool above the caller's level) |
 | -32601 | Method not found |
-| -32602 | Invalid params |
-| -32603 | Internal error (tool execution failure) |
+| -32602 | Invalid params (missing tool name, unknown tool) |
+| -32603 | Internal error (tool execution failure, argument type mismatch) |
+
+## Content Blocks
+
+`tools/call` results carry an array of content blocks. Text and image blocks
+encode their payload directly; resource blocks use the spec's `EmbeddedResource`
+shape:
+
+```json
+{
+  "type": "resource",
+  "resource": { "uri": "file:///x", "mimeType": "text/plain", "text": "hi" }
+}
+```
 
 ## Not Yet Implemented
 

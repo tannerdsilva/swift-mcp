@@ -12,11 +12,7 @@ let package = Package(
         .library(
             name: "MCP",
             targets: ["MCP"]
-        ),
-        .executable(
-            name: "MCPDemo",
-            targets: ["MCPDemo"]
-        ),
+        )
     ],
     dependencies: [
         .package(
@@ -35,12 +31,17 @@ let package = Package(
             url: "https://github.com/swift-server/swift-service-lifecycle.git",
             from: "2.6.0"
         ),
+        .package(
+            url: "https://github.com/apple/swift-docc-plugin.git",
+            from: "1.0.0"
+        ),
     ],
     targets: [
         // --- Main MCP library ---
         .target(
             name: "MCP",
             dependencies: [
+                .target(name: "MCPMacros"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "NIO", package: "swift-nio"),
                 .product(name: "NIOCore", package: "swift-nio"),
@@ -49,7 +50,6 @@ let package = Package(
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
             ],
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency"),
                 .swiftLanguageMode(.v6),
             ]
         ),
@@ -64,20 +64,6 @@ let package = Package(
                 .product(name: "SwiftDiagnostics", package: "swift-syntax"),
             ],
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency"),
-                .swiftLanguageMode(.v6),
-            ]
-        ),
-
-        // --- Demo executable ---
-        .executableTarget(
-            name: "MCPDemo",
-            dependencies: [
-                "MCP",
-                "MCPMacros",
-            ],
-            swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency"),
                 .swiftLanguageMode(.v6),
             ]
         ),
@@ -87,7 +73,6 @@ let package = Package(
             name: "MCPTests",
             dependencies: ["MCP", "MCPMacros"],
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency"),
                 .swiftLanguageMode(.v6),
             ]
         ),
@@ -105,7 +90,6 @@ let package = Package(
                 .product(name: "SwiftParserDiagnostics", package: "swift-syntax"),
             ],
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency"),
                 .swiftLanguageMode(.v6),
             ]
         ),

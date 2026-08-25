@@ -3,7 +3,7 @@
 // This source file is part of the MCP open source project
 //
 // Copyright (c) 2024 and the MCP project authors
-// Licensed under Apache License v2.0
+// Licensed under the MIT License
 //
 // See LICENSE.txt for license information
 //
@@ -53,10 +53,13 @@ public enum MCPContent: Sendable, Codable {
     // MARK: - Codable
 
     enum CodingKeys: String, CodingKey {
-        case type, text, data, mimeType, uri
+        case type, text, data, mimeType, uri, resource
     }
 
     /// Encodes this content block to a JSON-RPC compatible format.
+    ///
+    /// The `resource` case encodes the spec's `EmbeddedResource` shape —
+    /// `{ "type": "resource", "resource": { "uri", "mimeType?", "text?" } }`.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
@@ -69,9 +72,10 @@ public enum MCPContent: Sendable, Codable {
             try container.encode(mimeType, forKey: .mimeType)
         case .resource(let uri, let mimeType, let text):
             try container.encode("resource", forKey: .type)
-            try container.encode(uri, forKey: .uri)
-            try container.encodeIfPresent(mimeType, forKey: .mimeType)
-            try container.encodeIfPresent(text, forKey: .text)
+            var resource = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .resource)
+            try resource.encode(uri, forKey: .uri)
+            try resource.encodeIfPresent(mimeType, forKey: .mimeType)
+            try resource.encodeIfPresent(text, forKey: .text)
         }
     }
 
@@ -88,9 +92,10 @@ public enum MCPContent: Sendable, Codable {
             let mimeType = try container.decode(String.self, forKey: .mimeType)
             self = .image(data: data, mimeType: mimeType)
         case "resource":
-            let uri = try container.decode(String.self, forKey: .uri)
-            let mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
-            let text = try container.decodeIfPresent(String.self, forKey: .text)
+            let resource = try container.nestedContainer(keyedBy: CodingKeys.self, forKey: .resource)
+            let uri = try resource.decode(String.self, forKey: .uri)
+            let mimeType = try resource.decodeIfPresent(String.self, forKey: .mimeType)
+            let text = try resource.decodeIfPresent(String.self, forKey: .text)
             self = .resource(uri: uri, mimeType: mimeType, text: text)
         default:
             throw DecodingError.dataCorrupted(
@@ -196,6 +201,7 @@ public struct AnyCodable: Codable, @unchecked Sendable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.singleValueContainer()
         switch value {
+        case _ as NSNull: try container.encodeNil()
         case let v as String: try container.encode(v)
         case let v as Int: try container.encode(v)
         case let v as Double: try container.encode(v)
@@ -214,7 +220,8 @@ public struct AnyCodable: Codable, @unchecked Sendable {
     /// the raw description as a string to avoid silent data loss.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let v = try? container.decode(String.self) { value = v }
+        if container.decodeNil() { value = NSNull() }
+        else if let v = try? container.decode(String.self) { value = v }
         else if let v = try? container.decode(Int.self) { value = v }
         else if let v = try? container.decode(Double.self) { value = v }
         else if let v = try? container.decode(Bool.self) { value = v }

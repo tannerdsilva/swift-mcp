@@ -1,17 +1,26 @@
 # ``MCP``
 
-Build MCP (Model Context Protocol) servers in Swift with a declarative, macro-driven API.
+Build MCP (Model Context Protocol) servers in Swift with a declarative,
+macro-driven API.
 
 ## Overview
 
 swift-mcp is a Swift framework for building MCP servers. It provides:
 
-- **Macro-based tool definition**: Use `@MCPCommand` to define tools with `@Argument`, `@Option`, `@Flag`, and `@OptionGroup` wrappers — one struct generates both an MCP tool and a CLI command.
-- **Swift Service Lifecycle integration**: `MCPServer` conforms to the `Service` protocol. The only way to launch a server is through a `ServiceGroup`.
-- **Compile-time guarantees**: Tool names are unique, types are preserved, and the `@MCPApplication` macro generates exhaustive dispatch.
-- **Transport abstraction**: Built-in `StdioTransport` and `TCPTransport` with IPv4, IPv6, dual-stack, and Unix domain socket support.
-- **Access control**: Per-tool access levels with IP-based resolution for TCP transports.
-- **Async and sync tools**: Support both synchronous and asynchronous tool implementations.
+- **Macro-based tool definition**: use ``MCPCommand`` or ``FuncTool`` to define
+  tools with `@Argument`, `@Option`, `@Flag`, and `@OptionGroup` wrappers.
+- **Swift Service Lifecycle integration**: ``MCPServer`` conforms to the
+  `Service` protocol. The only way to launch a server is through a
+  ``ServiceGroup``.
+- **Compile-time guarantees**: parameters are discovered and argument
+  injection is generated at compile time; the ``MCPApplication`` macro
+  generates an exhaustive, type-preserving dispatch through a `ToolID` enum.
+- **Transport abstraction**: built-in ``StdioTransport`` and ``TCPTransport``
+  with IPv4, IPv6, dual-stack, and Unix domain socket support.
+- **Access control**: per-tool access levels with IP-based resolution for TCP
+  transports.
+- **Async and sync tools**: support both synchronous and asynchronous tool
+  implementations.
 
 ## Topics
 
@@ -20,12 +29,15 @@ swift-mcp is a Swift framework for building MCP servers. It provides:
 - <doc:GettingStarted>
 - <doc:ToolDefinition>
 - <doc:ServerConfiguration>
+- <doc:OptionGroups>
 
 ### Macros
 
 - <doc:MacroGuide>
 - ``MCPCommand``
 - ``MCPApplication``
+- ``FuncTool``
+- ``MCPOptionGroup``
 - ``Argument``
 - ``Option``
 - ``Flag``
@@ -42,7 +54,6 @@ swift-mcp is a Swift framework for building MCP servers. It provides:
 
 - ``MCPServer``
 - ``MCPToolBuilder``
-- ``MCPRouter``
 
 ### Transports
 
@@ -61,6 +72,10 @@ swift-mcp is a Swift framework for building MCP servers. It provides:
 
 - <doc:LifecycleManagement>
 
+### Protocol
+
+- <doc:MCPProtocol>
+
 ### Architecture
 
 - <doc:Architecture>
@@ -69,6 +84,11 @@ swift-mcp is a Swift framework for building MCP servers. It provides:
 ### Examples
 
 - <doc:Examples>
+- <doc:BasicTools>
+- <doc:AdvancedTools>
+- <doc:IntegrationPatterns>
+- <doc:RealWorldScenarios>
+- <doc:ExampleServerConfiguration>
 
 ### Supporting Types
 
@@ -79,7 +99,6 @@ swift-mcp is a Swift framework for building MCP servers. It provides:
 - ``MCPError``
 - ``MCPParamKind``
 - ``MCPParameterInfo``
-- ``MCPParamProtocol``
 - ``StaticMCPGroup``
 - ``ToolAvailability``
 - ``Tool``

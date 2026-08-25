@@ -3,13 +3,14 @@
 // This source file is part of the MCP open source project
 //
 // Copyright (c) 2024 and the MCP project authors
-// Licensed under Apache License v2.0
+// Licensed under the MIT License
 //
 // See LICENSE.txt for license information
 //
 //===----------------------------------------------------------------------===//
 
 import Foundation
+import Logging
 import NIOCore
 import NIOPosix
 
@@ -18,23 +19,33 @@ import NIOPosix
 /// A channel handler that reads newline-delimited JSON messages from a TCP
 /// connection and forwards them to the MCP message handler via an actor for
 /// serialized processing.
-final class MCPMessageHandler: ChannelInboundHandler {
+///
+/// - Note: marked `Sendable` because NIO's `childChannelInitializer` closure
+///   is `@Sendable`; all mutable state stays on the event loop.
+final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = ByteBuffer
 
     private let handler: @Sendable (Data, MCPCallerInfo) async throws -> Data?
     private let caller: MCPCallerInfo
+    private let logger: Logger?
     private var buffer: ByteBuffer?
     private var actor: TransportMessageHandler?
 
-    init(handler: @escaping @Sendable (Data, MCPCallerInfo) async throws -> Data?, caller: MCPCallerInfo) {
+    init(
+        handler: @escaping @Sendable (Data, MCPCallerInfo) async throws -> Data?,
+        caller: MCPCallerInfo,
+        logger: Logger? = nil
+    ) {
         self.handler = handler
         self.caller = caller
+        self.logger = logger
     }
 
     func channelActive(context: ChannelHandlerContext) {
         let channel = context.channel
         let handler = self.handler
         let caller = self.caller
+        let logger = self.logger
         self.actor = TransportMessageHandler(
             handler: handler,
             caller: caller,
@@ -45,19 +56,22 @@ final class MCPMessageHandler: ChannelInboundHandler {
                 channel.writeAndFlush(buf, promise: nil)
             },
             makeError: { requestData, error in
-                guard let requestJSON = try? JSONSerialization.jsonObject(with: requestData) as? [String: Any],
-                      let id = requestJSON["id"] else {
+                guard let request = try? JSONDecoder().decode(JSONRPCRequest.self, from: requestData) else {
+                    // Without an id there is no frame to reply to.
                     return nil
                 }
-                let errorResponse: [String: Any] = [
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "error": [
-                        "code": -32603,
-                        "message": "Internal error: \(error.localizedDescription)"
-                    ]
-                ]
-                return try? JSONSerialization.data(withJSONObject: errorResponse)
+                do {
+                    let response = JSONRPCErrorResponse(
+                        id: request.id,
+                        code: -32603,
+                        message: "Internal error: \(error.localizedDescription)"
+                    )
+                    return try JSONEncoder().encode(response)
+                } catch {
+                    // A fixed-shape error frame cannot realistically fail to encode.
+                    logger?.warning("Failed to encode TCP error response: \(error)")
+                    return nil
+                }
             }
         )
     }
@@ -135,9 +149,49 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
     private let address: ServerAddress
     private let eventLoopGroup: EventLoopGroup
     private let allowIPv4MappedIPv6: Bool
+    private let logger: Logger?
     private var channel: Channel?
     private var isRunning = false
     private let accessResolver: @Sendable (String) -> AccessLevel
+    /// The address the server channel bound to, once started.
+    ///
+    /// Useful when binding an ephemeral port (`ServerAddress.hostname("127.0.0.1", port: 0)`);
+    /// readable while the transport is running.
+    internal private(set) var boundAddress: SocketAddress?
+
+    /// The port the server channel bound to, or `nil` until started.
+    ///
+    /// Convenience for ephemeral-port binds, so callers do not need to touch
+    /// the NIO `SocketAddress` type directly.
+    internal var boundPort: Int? { boundAddress?.port }
+
+    /// Resolves loopback addresses to ``AccessLevel/admin``.
+    ///
+    /// NIO renders remote socket addresses with a scheme prefix, verified:
+    /// `[IPv4]127.0.0.1:49152`, `[IPv6]::1:49152`, and
+    /// `[IPv6]::ffff:127.0.0.1:49152` for IPv4-mapped IPv6. The canonical
+    /// prefixed forms are matched first; bare and bracket-without-scheme
+    /// spellings are also accepted for robustness when the resolver is fed
+    /// non-NIO address strings.
+    ///
+    /// - Parameter address: The caller's source address (the remote socket
+    ///   address description passed to the transport's access resolver).
+    /// - Returns: ``AccessLevel/admin`` for loopback addresses, otherwise
+    ///   ``AccessLevel/public``.
+    public static func defaultAccessResolver(_ address: String) -> AccessLevel {
+        if address.hasPrefix("[IPv4]127.0.0.1:")
+            || address.hasPrefix("[IPv6]::1:")
+            || address.hasPrefix("[IPv6]::ffff:127.0.0.1:")
+            // robustness for non-NIO spellings
+            || address.hasPrefix("127.0.0.1")
+            || address.hasPrefix("::1:")
+            || address.hasPrefix("::ffff:127.0.0.1")
+            || address.hasPrefix("[::1]:")
+            || address.hasPrefix("[::ffff:127.0.0.1]:") {
+            return .admin
+        }
+        return .public
+    }
 
     /// Creates a new TCP transport.
     ///
@@ -145,24 +199,22 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
     ///   - address: The address to bind to.
     ///   - eventLoopGroup: The NIO event loop group to use.
     ///   - allowIPv4MappedIPv6: Whether to allow IPv4-mapped IPv6 connections.
-    ///   - accessResolver: A closure that resolves an IP address to an access level.
-    ///     The default returns ``AccessLevel/admin`` for localhost and
-    ///     ``AccessLevel/public`` for all other addresses.
+    ///   - accessResolver: A closure that resolves an IP address to an access
+    ///     level. The default is ``defaultAccessResolver(_:)``, which grants
+    ///     ``AccessLevel/admin`` to IPv4 and IPv6 loopback callers.
+    ///   - logger: An optional logger for transport-level diagnostics.
     public init(
         address: ServerAddress,
         eventLoopGroup: EventLoopGroup = MultiThreadedEventLoopGroup.singleton,
         allowIPv4MappedIPv6: Bool = false,
-        accessResolver: @escaping @Sendable (String) -> AccessLevel = { address in
-            if address.hasPrefix("127.0.0.1") || address.hasPrefix("::1") || address.hasPrefix("::ffff:127.0.0.1") {
-                return .admin
-            }
-            return .public
-        }
+        accessResolver: @escaping @Sendable (String) -> AccessLevel = TCPTransport.defaultAccessResolver,
+        logger: Logger? = nil
     ) {
         self.address = address
         self.eventLoopGroup = eventLoopGroup
         self.allowIPv4MappedIPv6 = allowIPv4MappedIPv6
         self.accessResolver = accessResolver
+        self.logger = logger
     }
 
     /// Starts the transport and begins listening for connections.
@@ -176,11 +228,13 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
         let bootstrap = ServerBootstrap(group: eventLoopGroup)
             .serverChannelOption(ChannelOptions.backlog, value: 256)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { [accessResolver, handler] channel in
+            .childChannelInitializer { [accessResolver, handler, logger] channel in
                 let remoteAddress = channel.remoteAddress?.description ?? "unknown"
                 let accessLevel = accessResolver(remoteAddress)
                 let caller = MCPCallerInfo(sourceAddress: remoteAddress, accessLevel: accessLevel)
-                return channel.pipeline.addHandler(MCPMessageHandler(handler: handler, caller: caller))
+                return channel.pipeline.addHandler(
+                    MCPMessageHandler(handler: handler, caller: caller, logger: logger)
+                )
             }
             .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
@@ -218,7 +272,7 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
         }
 
         self.channel = channel
-        let localAddress = channel.localAddress?.description ?? "unknown"
+        self.boundAddress = channel.localAddress
 
         // Wait for the channel to close (server shutdown)
         try await channel.closeFuture.get()
@@ -229,6 +283,7 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
         isRunning = false
         try await channel?.close(mode: .all)
         channel = nil
+        boundAddress = nil
     }
 }
 

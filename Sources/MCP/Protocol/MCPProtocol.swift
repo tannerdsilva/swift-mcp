@@ -3,7 +3,7 @@
 // This source file is part of the MCP open source project
 //
 // Copyright (c) 2024 and the MCP project authors
-// Licensed under Apache License v2.0
+// Licensed under the MIT License
 //
 // See LICENSE.txt for license information
 //
@@ -46,36 +46,39 @@ struct JSONRPCRequest: Codable, Sendable {
         method = try container.decode(String.self, forKey: .method)
         params = try container.decodeIfPresent([String: AnyCodable].self, forKey: .params)
     }
+
+    /// Decodes the request's params into a concrete type.
+    ///
+    /// - Parameter type: The decodable params type.
+    /// - Returns: The decoded params, or `nil` if the request carried none.
+    func decodedParams<T: Decodable>(as type: T.Type) throws -> T? {
+        guard let params else { return nil }
+        let paramsData = try JSONEncoder().encode(params)
+        return try JSONDecoder().decode(type, from: paramsData)
+    }
 }
 
 /// A JSON-RPC response (success).
-struct JSONRPCResponse: Codable, Sendable {
+struct JSONRPCResponse<Result: Encodable & Sendable>: Encodable, Sendable {
     let jsonrpc: String
     let id: JSONRPCID
-    let result: AnyCodable?
+    let result: Result
 
     enum CodingKeys: String, CodingKey {
         case jsonrpc, id, result
     }
 
-    init(id: JSONRPCID, result: Any?) {
+    init(id: JSONRPCID, result: Result) {
         self.jsonrpc = "2.0"
         self.id = id
-        self.result = result.map { AnyCodable($0) }
+        self.result = result
     }
 
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(jsonrpc, forKey: .jsonrpc)
         try container.encode(id, forKey: .id)
-        try container.encodeIfPresent(result, forKey: .result)
-    }
-
-    init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        jsonrpc = try container.decode(String.self, forKey: .jsonrpc)
-        id = try container.decode(JSONRPCID.self, forKey: .id)
-        result = try container.decodeIfPresent(AnyCodable.self, forKey: .result)
+        try container.encode(result, forKey: .result)
     }
 }
 
@@ -129,17 +132,20 @@ struct JSONRPCNotification: Codable, Sendable {
     }
 }
 
-/// A JSON-RPC request ID.
+/// A JSON-RPC request ID — a string, an integer, or null for invalid/parse-error frames.
 enum JSONRPCID: Codable, Sendable, Hashable {
     case string(String)
     case int(Int)
+    case null
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let intVal = try? container.decode(Int.self) {
-            self = .int(intVal)
-        } else if let stringVal = try? container.decode(String.self) {
-            self = .string(stringVal)
+        if container.decodeNil() {
+            self = .null
+        } else if let intValue = try? container.decode(Int.self) {
+            self = .int(intValue)
+        } else if let stringValue = try? container.decode(String.self) {
+            self = .string(stringValue)
         } else {
             throw DecodingError.dataCorruptedError(
                 in: container,
@@ -155,6 +161,8 @@ enum JSONRPCID: Codable, Sendable, Hashable {
             try container.encode(value)
         case .int(let value):
             try container.encode(value)
+        case .null:
+            try container.encodeNil()
         }
     }
 }
@@ -214,6 +222,17 @@ struct MCPToolDefinition: Codable, Sendable {
         }
         inputSchema = schema
     }
+}
+
+/// The `tools/list` result payload.
+struct ToolsListResult: Encodable, Sendable {
+    let tools: [MCPToolDefinition]
+}
+
+/// The `tools/call` result payload.
+struct ToolsCallResult: Encodable, Sendable {
+    let content: [MCPContent]
+    let isError: Bool
 }
 
 /// Dynamic coding key for arbitrary-keyed containers.
