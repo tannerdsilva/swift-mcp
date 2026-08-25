@@ -420,10 +420,20 @@ public final class MCPServer: Service, @unchecked Sendable {
         let methodName: String
         let params: [String: AnyCodable]?
 
+        // Peek at the envelope to distinguish requests (which carry an id) from
+        // notifications (which must not). An invalid id value — a bool, array,
+        // or object — still marks the frame as a request, so it gets a
+        // -32600 Invalid Request error with a null id instead of a silent drop.
+        let envelope = try? JSONDecoder().decode([String: AnyCodable].self, from: data)
+        let hasID = envelope?["id"] != nil
+
         if let request = try? JSONDecoder().decode(JSONRPCRequest.self, from: data) {
             requestID = request.id
             methodName = request.method
             params = request.params
+        } else if hasID {
+            _logger.warning("Invalid JSON-RPC request id in: \(String(decoding: data, as: UTF8.self))")
+            return makeErrorResponse(id: .null, code: -32600, message: "Invalid Request")
         } else if let notification = try? JSONDecoder().decode(JSONRPCNotification.self, from: data) {
             _logger.trace("Received notification: method=\(notification.method)")
             // Notifications never produce responses.

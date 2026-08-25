@@ -2132,3 +2132,22 @@ func arrayParameterSchemaItems() {
     let items = tags?["items"] as? [String: Any]
     #expect(items?["type"] as? String == "string")
 }
+
+@Test("Invalid JSON-RPC request id types get a -32600 Invalid Request response, not silence")
+func invalidIDTypesGetErrorResponse() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": true, "method": "ping"]),
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": ["bad"], "method": "ping"]),
+    ]
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
+
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 2)
+    for data in transport.sentMessages {
+        let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let error = response?["error"] as? [String: Any]
+        #expect(error?["code"] as? Int == -32600)
+    }
+}
