@@ -132,10 +132,11 @@ struct JSONRPCNotification: Codable, Sendable {
     }
 }
 
-/// A JSON-RPC request ID — a string, an integer, or null for invalid/parse-error frames.
+/// A JSON-RPC request ID — a string, an integer, a fractional number, or null for invalid/parse-error frames.
 enum JSONRPCID: Codable, Sendable, Hashable {
     case string(String)
     case int(Int)
+    case number(Double)
     case null
 
     init(from decoder: any Decoder) throws {
@@ -144,12 +145,14 @@ enum JSONRPCID: Codable, Sendable, Hashable {
             self = .null
         } else if let intValue = try? container.decode(Int.self) {
             self = .int(intValue)
+        } else if let doubleValue = try? container.decode(Double.self) {
+            self = .number(doubleValue)
         } else if let stringValue = try? container.decode(String.self) {
             self = .string(stringValue)
         } else {
             throw DecodingError.dataCorruptedError(
                 in: container,
-                debugDescription: "JSON-RPC ID must be a string or integer"
+                debugDescription: "JSON-RPC ID must be a string or number"
             )
         }
     }
@@ -160,6 +163,8 @@ enum JSONRPCID: Codable, Sendable, Hashable {
         case .string(let value):
             try container.encode(value)
         case .int(let value):
+            try container.encode(value)
+        case .number(let value):
             try container.encode(value)
         case .null:
             try container.encodeNil()

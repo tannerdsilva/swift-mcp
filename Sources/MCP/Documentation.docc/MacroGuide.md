@@ -145,8 +145,10 @@ func run() { /* side effect */ }
 // Generates: run(); return .text("")
 ```
 
-Exactly one `run()` method is required; zero or multiple overloads fail with a
-diagnostic rather than silently picking one.
+Exactly one `run()` declaration is expected; multiple overloads are rejected
+with a diagnostic. `run()` may also be provided by an **extension** of the
+struct — the macro cannot see extension members, so in that case it falls back
+to a plain sync call and the extension resolves at compile time.
 
 ### Access Control
 

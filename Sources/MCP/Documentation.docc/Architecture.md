@@ -118,9 +118,13 @@ conforming to the protocol and injecting them via
 
 ### Compile-time uniqueness and dispatch
 
-Tool names are unique at compile time when using ``MCPApplication`` (the
-``ToolID`` enum), and dispatch is an exhaustive switch with the concrete tool
-type in each branch — no `any MCPTool` erasure on the dispatch path.
+``MCPApplication`` generates a ``MCPToolID`` enum with one case per tool, plus
+an exhaustive `callTool(_:arguments:)` switch that keeps the concrete tool type
+in every branch — no `any MCPTool` erasure — when called directly. The server's
+standard `tools/call` route does not use it: `main()` registers the tools into
+the server's type-erased registry, which dispatches by name. Use
+`callTool(_:arguments:)` when you want a type-checked, exhaustive invocation
+path from your own code (for example, to route or test commands).
 
 ### ServiceLifecycle integration
 

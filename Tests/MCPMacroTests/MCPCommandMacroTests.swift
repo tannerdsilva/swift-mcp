@@ -1162,13 +1162,41 @@ func mcpCommandOptionalOnlyHasNoSetParams() {
     )
 }
 
-@Test("MCPCommand with no run() method is rejected")
-func mcpCommandMissingRunRejected() {
-    assertMCPExpansionFails(
+@Test("MCPCommand without a member run() expands to a plain call (extension-provided run())")
+func mcpCommandNoMemberRunFallsBack() {
+    assertMCPExpansion(
         """
         @MCPCommand(description: "NoRun")
         struct NoRunCommand {
             var x: Int = 1
+        }
+        """,
+        expandedSource: """
+        struct NoRunCommand {
+            var x: Int = 1
+        }
+
+        extension NoRunCommand: MCPTool {
+            public static var configuration: MCPToolConfiguration {
+                MCPToolConfiguration(description: "NoRun")
+            }
+
+            public static func discoverParameters() -> [MCPParameterInfo] {
+                []
+            }
+
+            public mutating func apply(arguments: [String: Any]) throws {
+                for param in Self.discoverParameters() where param.required {
+                        if arguments[param.name] == nil {
+                            throw MCPError.missingArgument(param.name)
+                        }
+                    }
+            }
+
+            public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
+                        let output = run()
+                        return .text(String(describing: output))
+            }
         }
         """,
         macros: ["MCPCommand": MCPCommandMacro.self]

@@ -110,7 +110,24 @@ enum JSONSchemaBuilder: Sendable {
             schema["enum"] = enumValues
         }
 
+        // Array-typed parameters advertise their element type, so clients can
+        // validate the shape of every element.
+        if jsonType == .array, let elementTypeName = arrayElementTypeName(from: param.typeName) {
+            schema["items"] = ["type": mapTypeName(elementTypeName).rawValue]
+        }
+
         return schema
+    }
+
+    /// Extracts the element type name from a normalized array-typed parameter,
+    /// unwrapping an optional wrapper first (`Optional<Array<String>>` → `String`).
+    private static func arrayElementTypeName(from typeName: String) -> String? {
+        var name = typeName
+        if name.hasPrefix("Optional<"), name.hasSuffix(">") {
+            name = String(name.dropFirst(9).dropLast(1))
+        }
+        guard name.hasPrefix("Array<"), name.hasSuffix(">") else { return nil }
+        return String(name.dropFirst(6).dropLast(1))
     }
 
     /// Maps a Swift type name to a JSON Schema type.

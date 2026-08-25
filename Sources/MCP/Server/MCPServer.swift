@@ -629,6 +629,14 @@ public enum MCPToolBuilder: Sendable {
         [expression]
     }
 
+    /// Accepts an array of tools (including the empty array) directly.
+    ///
+    /// Enables `{ [] }` and `{ [GetWeather(), Greet()] }` at call sites,
+    /// matching the common dynamic-registration pattern.
+    public static func buildExpression(_ elements: [any MCPTool]) -> [any MCPTool] {
+        elements
+    }
+
     /// Handles optional tool blocks.
     public static func buildOptional(_ component: [any MCPTool]?) -> [any MCPTool] {
         component ?? []

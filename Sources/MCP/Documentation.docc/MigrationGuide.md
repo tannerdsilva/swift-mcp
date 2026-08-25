@@ -10,10 +10,11 @@ This guide covers breaking changes between versions and how to update your code.
 
 ### Tool-Creation and Codegen Changes
 
-- ``MCPCommand`` now requires **exactly one** `run()` method (zero or multiple
-  overloads are a diagnostic). Non-throwing `run()` methods no longer generate
-  an unconditional `try`, and a `Void` `run()` produces an empty text block
-  instead of `"()"` — both macros now agree.
+- ``MCPCommand`` now rejects **multiple** member `run()` overloads with a
+  diagnostic. Non-throwing `run()` methods no longer generate an unconditional
+  `try`, a `Void` `run()` produces an empty text block instead of `"()"` —
+  both macros now agree — and a `run()` provided by an **extension** of the
+  struct still works (the macro falls back to a plain call).
 - ``FuncTool`` supports **any return type** (rendered via `String(describing:)`),
   `Void` returns produce an empty text block, and `_`-labeled, `inout`, and
   variadic parameters are rejected with diagnostics. The wrapped function must

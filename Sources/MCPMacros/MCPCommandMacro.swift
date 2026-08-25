@@ -107,22 +107,29 @@ public struct MCPCommandMacro: ExtensionMacro {
 
     /// Detects the signature of the user's `run()` method.
     ///
-    /// Requires exactly one `run()` declaration; zero or multiple overloads are
-    /// ambiguous and fail loudly instead of mis-detecting the first one found.
+    /// Multiple `run()` overloads in the struct's own member block are
+    /// ambiguous and fail loudly. A `run()` may also be provided by an
+    /// extension of the struct, which the macro cannot see: when the member
+    /// block has none, the generated `invoke` falls back to a plain
+    /// (sync, non-throwing, non-`Void`) call and the extension's `run()`
+    /// resolves at compile time.
     static func detectRun(in declaration: some DeclGroupSyntax) throws -> RunSignature {
         let runFunctions = declaration.memberBlock.members.compactMap { member -> FunctionDeclSyntax? in
             guard let funcDecl = member.decl.as(FunctionDeclSyntax.self), funcDecl.name.text == "run" else { return nil }
             return funcDecl
         }
 
-        guard !runFunctions.isEmpty else {
-            throw MacroError.message("@MCPCommand requires a run() method on the annotated struct")
-        }
-        guard runFunctions.count == 1 else {
+        guard runFunctions.count <= 1 else {
             throw MacroError.message("@MCPCommand requires exactly one run() method (found \(runFunctions.count))")
         }
 
-        let signature = runFunctions[0].signature
+        guard let runFunction = runFunctions.first else {
+            // run() may be declared in an extension of the struct; fall back to a
+            // plain call and let the extension resolve at compile time.
+            return RunSignature(isAsync: false, isThrowing: false, isVoid: false)
+        }
+
+        let signature = runFunction.signature
         let isAsync = signature.effectSpecifiers?.asyncSpecifier != nil
         let isThrowing = signature.effectSpecifiers?.throwsClause?.throwsSpecifier != nil
         let isVoid: Bool

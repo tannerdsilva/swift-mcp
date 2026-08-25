@@ -21,12 +21,14 @@
 /// 3. ``MCPTool/apply(arguments:)`` and ``MCPTool/invoke(context:)`` that
 ///    call through to the user's `run()`.
 ///
-/// The struct must declare **exactly one** `run()` method. Its signature is
-/// detected at compile time: `async`, `throws`, both, or neither are all
-/// supported, and the generated `invoke` applies the matching `try`/`await`
-/// prefix — never an unconditional one. The `run()` return value is rendered
-/// to text via `String(describing:)`, so any return type works; throwing
-/// functions surface errors as JSON-RPC `-32603`.
+/// The struct must declare **exactly one** `run()` method — or provide it from
+/// an extension of the struct (the macro falls back to a plain call and the
+/// extension resolves at compile time). Multiple `run()` overloads are
+/// rejected. The detected signature (`async`, `throws`, `Void`) shapes the
+/// generated `invoke`, which applies the matching `try`/`await` prefix — never
+/// an unconditional one. The `run()` return value is rendered to text via
+/// `String(describing:)`, so any return type works; throwing functions surface
+/// errors as JSON-RPC `-32603`.
 ///
 /// The wrapper mapping is 1:1 and transparent with the parameter kinds:
 ///   `@Argument` → ``MCPParamKind/argument`` (required)

@@ -1997,3 +1997,138 @@ func mcpCommandVoidRunInvocation() async throws {
         Issue.record("Expected text content")
     }
 }
+
+// MARK: - Skeptic probe: fractional JSON-RPC ids
+
+@Test("Fractional JSON-RPC request ids are echoed (spec: ids may be any Number)")
+func fractionalRequestIDIsEchoed() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1.5, "method": "ping"])
+    ]
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
+
+    try await server.runService()
+
+    print("[probe] fractional-id sent messages: \(transport.sentMessages.count)")
+    if let data = transport.sentMessages.first {
+        print("[probe] fractional-id response: \(String(decoding: data, as: UTF8.self))")
+    }
+    // JSON-RPC 2.0: request ids are String, Number (including fractions), or null.
+    // A request with a fractional id must receive a response echoing that id.
+    #expect(transport.sentMessages.count == 1)
+    guard let data = transport.sentMessages.first else { return }
+    let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    #expect(response?["id"] as? Double == 1.5)
+    #expect(response?["result"] != nil)
+}
+
+// MARK: - Skeptic probe: instance-tool access enforcement
+
+/// A transport that delivers all messages to the handler with a `.public` caller.
+final class PublicCallerTransport: MCPTransport, @unchecked Sendable {
+    var receivedMessages: [Data] = []
+    var sentMessages: [Data] = []
+
+    func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
+        for message in receivedMessages {
+            if let response = try await handler(message, MCPCallerInfo(sourceAddress: "public-probe", accessLevel: .public)) {
+                sentMessages.append(response)
+            }
+        }
+    }
+
+    func stop() async throws {}
+}
+
+@Test("Instance-registered admin tool is hidden from and denied to .public callers")
+func instanceToolAccessEnforcement() async throws {
+    let transport = PublicCallerTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]]),
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": ["name": "adminInstance", "arguments": [:]]
+        ]),
+    ]
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
+    server.registerInstance("adminInstance", instance: AdminInstanceTool())
+
+    try await server.runService()
+
+    print("[probe] instance-access messages: \(transport.sentMessages.count)")
+    for data in transport.sentMessages {
+        print("[probe]   \(String(decoding: data, as: UTF8.self))")
+    }
+    guard transport.sentMessages.count == 2 else { return }
+
+    let list = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let tools = (list?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+    #expect(tools?.isEmpty == true)
+
+    let call = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let error = call?["error"] as? [String: Any]
+    #expect(error?["code"] as? Int == -32000)
+}
+
+struct AdminInstanceTool: MCPTool {
+    static let configuration = MCPToolConfiguration(
+        description: "admin-only instance tool",
+        requiredAccess: .admin
+    )
+    func invoke(context: MCPContext) async throws -> MCPToolResult {
+        .text("admin secret")
+    }
+}
+
+// MARK: - Skeptic findings: extension run(), builder array literal, string-id round trip
+
+@MCPCommand(description: "Extension-run probe")
+struct ExtRunTool {
+    @Option(description: "n") var n: Int = 1
+}
+
+extension ExtRunTool {
+    func run() -> String { "ext-\(n)" }
+}
+
+@Test("MCPCommand with an extension-provided run() compiles and invokes")
+func extensionProvidedRunWorks() async throws {
+    var tool = ExtRunTool()
+    try tool.apply(arguments: ["n": 7])
+    let result = try await tool.invoke(context: MCPContext(arguments: [:]))
+    #expect(result.isError == false)
+    if case .text(let text) = result.content[0] {
+        #expect(text == "ext-7")
+    } else {
+        Issue.record("Expected text content")
+    }
+}
+
+@Test("Empty builder closure registers no tools")
+func emptyBuilderClosureWorks() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]]),
+    ]
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport, tools: { [] })
+    try await server.runService()
+
+    guard let data = transport.sentMessages.first else {
+        Issue.record("expected a tools/list response")
+        return
+    }
+    let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let tools = (response?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+    #expect(tools?.isEmpty == true)
+}
+
+@Test("Array parameters advertise their element type in JSON Schema")
+func arrayParameterSchemaItems() {
+    let schema = JSONSchemaBuilder.buildSchema(for: VariedTypesCommand.self)
+    let properties = schema["properties"] as? [String: Any]
+    let tags = properties?["tags"] as? [String: Any]
+    #expect(tags?["type"] as? String == "array")
+    let items = tags?["items"] as? [String: Any]
+    #expect(items?["type"] as? String == "string")
+}
