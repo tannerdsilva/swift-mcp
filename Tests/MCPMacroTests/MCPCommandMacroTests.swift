@@ -1194,7 +1194,7 @@ func mcpCommandNoMemberRunFallsBack() {
             }
 
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
-                        let output = run()
+                        let output = try run()
                         return .text(String(describing: output))
             }
         }

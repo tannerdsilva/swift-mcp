@@ -438,6 +438,13 @@ public final class MCPServer: Service, @unchecked Sendable {
             _logger.trace("Received notification: method=\(notification.method)")
             // Notifications never produce responses.
             return nil
+        } else if envelope != nil {
+            // Valid JSON, but neither a decodable request nor a notification —
+            // e.g. a request missing the jsonrpc field with no id. The JSON-RPC
+            // spec reserves -32700 for input that is not valid JSON; anything
+            // that parses but is malformed is an Invalid Request.
+            _logger.warning("Invalid JSON-RPC message: \(String(decoding: data, as: UTF8.self))")
+            return makeErrorResponse(id: .null, code: -32600, message: "Invalid Request")
         } else {
             _logger.warning("Unable to parse JSON-RPC message: \(String(decoding: data, as: UTF8.self))")
             return makeErrorResponse(id: .null, code: -32700, message: "Parse error")

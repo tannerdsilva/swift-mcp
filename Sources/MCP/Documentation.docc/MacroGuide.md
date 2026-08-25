@@ -148,7 +148,9 @@ func run() { /* side effect */ }
 Exactly one `run()` declaration is expected; multiple overloads are rejected
 with a diagnostic. `run()` may also be provided by an **extension** of the
 struct — the macro cannot see extension members, so in that case it falls back
-to a plain sync call and the extension resolves at compile time.
+to a `try run()` call and the extension resolves at compile time. (The macro
+cannot detect an async or `throws` extension `run()` precisely; a
+non-throwing extension `run()` produces a benign `try` warning.)
 
 ### Access Control
 

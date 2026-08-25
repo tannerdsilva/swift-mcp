@@ -103,6 +103,9 @@ public struct MCPCommandMacro: ExtensionMacro {
         let isThrowing: Bool
         /// Whether `run()` returns `Void` (or has no return clause).
         let isVoid: Bool
+        /// Whether `run()` was not found in the struct's member block and is
+        /// assumed to be extension-provided (its signature is unknowable).
+        let isExtensionFallback: Bool
     }
 
     /// Detects the signature of the user's `run()` method.
@@ -124,9 +127,13 @@ public struct MCPCommandMacro: ExtensionMacro {
         }
 
         guard let runFunction = runFunctions.first else {
-            // run() may be declared in an extension of the struct; fall back to a
-            // plain call and let the extension resolve at compile time.
-            return RunSignature(isAsync: false, isThrowing: false, isVoid: false)
+            // run() may be declared in an extension of the struct. Its
+            // signature is unknowable here; fall back to a `try` call (no
+            // await — `await` on a sync call is an error) and let the
+            // extension resolve at compile time. Non-throwing extension
+            // run() methods get a benign `try` warning; matches pre-F5
+            // behavior for this case.
+            return RunSignature(isAsync: false, isThrowing: false, isVoid: false, isExtensionFallback: true)
         }
 
         let signature = runFunction.signature
@@ -139,7 +146,7 @@ public struct MCPCommandMacro: ExtensionMacro {
         } else {
             isVoid = true
         }
-        return RunSignature(isAsync: isAsync, isThrowing: isThrowing, isVoid: isVoid)
+        return RunSignature(isAsync: isAsync, isThrowing: isThrowing, isVoid: isVoid, isExtensionFallback: false)
     }
 
     // MARK: - Property Extraction
@@ -212,8 +219,12 @@ public struct MCPCommandMacro: ExtensionMacro {
 
         // Only emit `try`/`await` when the user's run() is actually throwing or
         // async — an unconditional prefix generates warnings for every
-        // non-throwing run() (the sync and async non-throwing cases).
-        let tryPrefix = runSignature.isThrowing ? "try " : ""
+        // non-throwing run() (the sync and async non-throwing cases). The
+        // extension fallback always carries `try` (an unknowable extension
+        // run() may throw); this restores pre-F5 compatibility for
+        // throwing extension run() methods at the cost of a benign `try`
+        // warning when the extension is non-throwing.
+        let tryPrefix = (runSignature.isThrowing || runSignature.isExtensionFallback) ? "try " : ""
         let awaitPrefix = runSignature.isAsync ? "await " : ""
         let invokeCall = "\(tryPrefix)\(awaitPrefix)run()"
 

@@ -2151,3 +2151,70 @@ func invalidIDTypesGetErrorResponse() async throws {
         #expect(error?["code"] as? Int == -32600)
     }
 }
+
+@Test("MCPCommand with a sync-throwing extension run() compiles and propagates errors")
+func extensionThrowingRunWorks() async throws {
+    var tool = ExtThrowingRunTool()
+    do {
+        _ = try await tool.invoke(context: MCPContext(arguments: [:]))
+        Issue.record("Expected the extension run() error to propagate")
+    } catch MCPError.internalError {
+        // expected
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+}
+
+@MCPCommand(description: "Extension-throwing probe")
+struct ExtThrowingRunTool {
+    func shouldFail() -> Bool { true }
+}
+
+extension ExtThrowingRunTool {
+    func run() throws -> String {
+        if shouldFail() { throw MCPError.internalError("boom") }
+        return "ok"
+    }
+}
+
+@Test("Malformed JSON-RPC objects get -32600 Invalid Request; non-JSON gets -32700 Parse error")
+func malformedObjectIsInvalidRequest() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        // JSON object but missing the jsonrpc + id
+        try JSONSerialization.data(withJSONObject: ["method": "ping"]),
+        // JSON object, has id, missing jsonrpc
+        try JSONSerialization.data(withJSONObject: ["id": 9, "method": "ping"]),
+        // genuine garbage (not JSON) — sticks with -32700
+        Data("this is not json".utf8),
+    ]
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
+
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 3)
+    // JSON objects that fail to decode as request or notification -> -32600.
+    for data in transport.sentMessages.prefix(2) {
+        let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let error = response?["error"] as? [String: Any]
+        #expect(error?["code"] as? Int == -32600)
+    }
+    // Genuine non-JSON input stays -32700 Parse error.
+    let garbage = try JSONSerialization.jsonObject(with: transport.sentMessages[2]) as? [String: Any]
+    let garbageError = garbage?["error"] as? [String: Any]
+    #expect(garbageError?["code"] as? Int == -32700)
+}
+
+@Test("Notify-shaped frames without an id never produce a response")
+func idlessFramesStaySilent() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "method": "notifications/initialized"]),
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "method": "notifications/cancelled"]),
+    ]
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
+
+    try await server.runService()
+
+    #expect(transport.sentMessages.isEmpty)
+}
