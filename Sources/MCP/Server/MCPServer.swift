@@ -480,19 +480,55 @@ public final class MCPServer: Service, @unchecked Sendable {
 
     // MARK: - Initialize
 
+    /// The protocol versions this server supports.
+    ///
+    /// The MCP wire surface this server implements (`initialize`, `ping`,
+    /// `tools/list`, `tools/call`, and the two notification no-ops) is stable
+    /// across these revisions, so any of them may be negotiated.
+    static let supportedProtocolVersions: Set<String> = [
+        "2024-11-05",
+        "2025-03-26",
+        "2025-06-18",
+        "2025-11-25",
+    ]
+
+    /// The newest protocol version this server supports.
+    ///
+    /// Answered when the client requests a version outside
+    /// ``supportedProtocolVersions`` or omits one.
+    static let latestProtocolVersion = "2025-11-25"
+
+    /// Negotiates the response protocol version.
+    ///
+    /// Echoes the client's requested version when it is supported — the MCP
+    /// spec's expectation and what mainstream SDKs verify against the server's
+    /// reply — otherwise answers with the newest supported version.
+    private func negotiateProtocolVersion(requested: String?) -> String {
+        guard let requested, Self.supportedProtocolVersions.contains(requested) else {
+            return Self.latestProtocolVersion
+        }
+        return requested
+    }
+
     /// Handles the `initialize` request.
     ///
-    /// Returns server capabilities including supported protocol version and
-    /// available features.
+    /// Returns server capabilities including the negotiated protocol version
+    /// and available features.
     private func handleInitialize(request params: [String: AnyCodable]?, id: JSONRPCID) async throws -> Data {
-        if let params, let initParams = try? JSONDecoder().decode(InitializeParams.self, from: try JSONEncoder().encode(params)) {
+        // Lenient: read the requested version straight from the params — clients
+        // may omit fields the strict InitializeParams model requires, and only
+        // the version string is needed for negotiation.
+        let requestedProtocolVersion = params?["protocolVersion"]?.value as? String
+
+        if let params,
+           let initParams = try? JSONDecoder().decode(InitializeParams.self, from: try JSONEncoder().encode(params)) {
             _logger.info(
                 "Client initialized: \(initParams.clientInfo.name) v\(initParams.clientInfo.version) (protocol \(initParams.protocolVersion))"
             )
         }
 
         let result = InitializeResult(
-            protocolVersion: "2025-06-18",
+            protocolVersion: negotiateProtocolVersion(requested: requestedProtocolVersion),
             capabilities: ServerCapabilities(tools: true),
             serverInfo: ImplementationInfo(name: name, version: version)
         )

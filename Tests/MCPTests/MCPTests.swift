@@ -1052,6 +1052,47 @@ func serverInitialize() async throws {
     #expect(serverInfo?["name"] as? String == "TestServer")
 }
 
+@Test("Server echoes a supported protocol version from initialize")
+func serverNegotiatesSupportedProtocolVersion() async throws {
+    let transport = MockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": ["protocolVersion": "2025-11-25", "clientInfo": ["name": "test", "version": "1.0"]]
+        ])
+    ]
+
+    try await runTestServer(transport: transport)
+
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let result = response?["result"] as? [String: Any]
+    #expect(result?["protocolVersion"] as? String == "2025-11-25")
+}
+
+@Test("Server answers with its latest version for unknown or missing protocol versions")
+func serverFallsBackToLatestProtocolVersion() async throws {
+    let transport = MockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": ["protocolVersion": "2099-01-01", "clientInfo": ["name": "test", "version": "1.0"]]
+        ]),
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 2, "method": "initialize",
+            "params": ["clientInfo": ["name": "test", "version": "1.0"]]
+        ]),
+    ]
+
+    try await runTestServer(transport: transport)
+
+    #expect(transport.sentMessages.count == 2)
+    for data in transport.sentMessages {
+        let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let result = response?["result"] as? [String: Any]
+        #expect(result?["protocolVersion"] as? String == MCPServer.latestProtocolVersion)
+    }
+}
+
 @Test("Server responds to ping request")
 func serverPing() async throws {
     let transport = MockTransport()

@@ -4,7 +4,10 @@ This document describes the MCP (Model Context Protocol) methods supported by sw
 
 ## Protocol Version
 
-The server advertises protocol version `2025-06-18`.
+The server negotiates its protocol version from the client's `initialize` request:
+it supports `2024-11-05`, `2025-03-26`, `2025-06-18`, and `2025-11-25`, and
+echoes the client's requested version when it is in that set — otherwise it
+answers with its newest supported version (`2025-11-25`).
 
 ## Message Format
 
