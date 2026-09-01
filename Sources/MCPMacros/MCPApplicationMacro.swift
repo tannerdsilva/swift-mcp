@@ -7,23 +7,39 @@ import SwiftDiagnostics
 /// Information about a `@Tool` property extracted from the struct declaration.
 struct ToolPropertyInfo {
     let name: String
+    /// The concrete tool type name (e.g. `Greet`) used for static access to
+    /// `toolName`, `configuration`, and `discoverParameters()` in the
+    /// generated dispatcher surface.
+    let typeName: String
     let isDebugOnly: Bool
 }
 
 // MARK: - MCPApplicationMacro
 
-/// Generates a `main()` entry point, a `ToolID` enum, and exhaustive dispatch.
+/// Generates the `MCPToolDispatcher` surface, a `ToolID` enum, and `main()`.
 ///
-/// This macro is an attached member macro. It reads the struct's `@Tool`
-/// properties and generates:
+/// This macro is declared as both an attached member macro and an attached
+/// extension macro. The member expansion reads the struct's `@Tool`
+/// properties and generates, inside the type:
 ///
 /// 1. A ``MCPToolID``-conforming enum with one case per tool
-/// 2. A `callTool(_:arguments:)` method with exhaustive switch dispatch
-/// 3. A `static func main()` that creates the server, registers tools, and runs
+/// 2. A typed `callTool(_:arguments:context:)` method with exhaustive switch
+///    dispatch over each tool's **concrete** type
+/// 3. The ``MCPToolDispatcher`` requirements — `toolID(named:)`,
+///    `requiredAccess(named:)`, `callTool(named:arguments:context:)`, and
+///    `toolCatalog(for:)` — all built from static per-tool metadata, so the
+///    server routes `tools/list`/`tools/call` with no runtime type erasure
+/// 4. A `static func main()` that creates the server with `dispatcher: app`
 ///
-/// Tools marked with `@Tool(available: .debug)` are wrapped in `#if DEBUG`.
-/// An `address` parameter generates a ``TCPTransport`` bound to that address.
-public struct MCPApplicationMacro: MemberMacro {
+/// The extension expansion adds `: MCPToolDispatcher` conformance; the
+/// requirements are satisfied by the member expansion above.
+///
+/// Tools marked with `@Tool(available: .debug)` are wrapped in `#if DEBUG` in
+/// every generated artifact (enum case, dispatch, catalog, access gate), so a
+/// release build neither lists nor serves them.
+public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
+
+    // MARK: - Member Expansion
 
     public static func expansion(
         of node: AttributeSyntax,
@@ -61,24 +77,59 @@ public struct MCPApplicationMacro: MemberMacro {
             toolProperties: toolProperties
         )
 
-        let callToolFunc = generateCallTool(
+        let invokeSwitch = generateInvokeSwitch(
             enumName: enumName,
             toolProperties: toolProperties
         )
+
+        let typedCallTool = generateTypedCallTool(enumName: enumName)
+
+        let toolIDLookup = generateToolIDLookup(
+            enumName: enumName,
+            toolProperties: toolProperties
+        )
+
+        let requiredAccess = generateRequiredAccess(
+            enumName: enumName,
+            toolProperties: toolProperties
+        )
+
+        let stringCallTool = generateStringCallTool(enumName: enumName)
+
+        let toolCatalog = generateToolCatalog(toolProperties: toolProperties)
 
         let mainFunc = generateMain(
             structName: structName,
             serverName: serverName,
             serverVersion: serverVersion,
             addressArg: addressArg,
-            transportArg: transportArg,
-            toolProperties: toolProperties
+            transportArg: transportArg
         )
 
         return [
             DeclSyntax(stringLiteral: toolIDEnum),
-            DeclSyntax(stringLiteral: callToolFunc),
+            DeclSyntax(stringLiteral: invokeSwitch),
+            DeclSyntax(stringLiteral: typedCallTool),
+            DeclSyntax(stringLiteral: toolIDLookup),
+            DeclSyntax(stringLiteral: requiredAccess),
+            DeclSyntax(stringLiteral: stringCallTool),
+            DeclSyntax(stringLiteral: toolCatalog),
             DeclSyntax(stringLiteral: mainFunc),
+        ]
+    }
+
+    // MARK: - Extension Expansion
+
+    public static func expansion(
+        of node: AttributeSyntax,
+        attachedTo declaration: some DeclGroupSyntax,
+        providingExtensionsOf type: some TypeSyntaxProtocol,
+        conformingTo protocols: [TypeSyntax],
+        in context: some MacroExpansionContext
+    ) throws -> [ExtensionDeclSyntax] {
+        let typeName = trimmed(type.description)
+        return [
+            try ExtensionDeclSyntax("extension \(raw: typeName): MCPToolDispatcher {}")
         ]
     }
 
@@ -116,17 +167,40 @@ public struct MCPApplicationMacro: MemberMacro {
             for binding in varDecl.bindings {
                 guard let name = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text else { continue }
 
+                // Extract the concrete tool type name from the type annotation
+                // or the initializer expression (e.g. "Greet()" -> "Greet").
+                let typeName: String
+                if let type = binding.typeAnnotation?.type {
+                    typeName = trimmed(type.description)
+                } else if let initExpr = binding.initializer?.value {
+                    typeName = extractTypeFromInitializer(initExpr)
+                } else {
+                    typeName = "Never"
+                }
+
                 // Check for available: .debug parameter
                 let isDebugOnly = extractDebugAvailability(from: attr)
 
                 properties.append(ToolPropertyInfo(
                     name: name,
+                    typeName: typeName,
                     isDebugOnly: isDebugOnly
                 ))
             }
         }
 
         return properties
+    }
+
+    /// Extracts the type name from an initializer expression.
+    /// e.g., "Greet()" -> "Greet", "MyModule.Greet()" -> "MyModule.Greet"
+    static func extractTypeFromInitializer(_ expr: ExprSyntax) -> String {
+        let desc = trimmed(expr.description)
+        // Remove trailing parentheses and arguments
+        if let parenIndex = desc.firstIndex(of: "(") {
+            return String(desc[..<parenIndex])
+        }
+        return desc
     }
 
     /// Checks if the @Tool attribute has `available: .debug`.
@@ -162,29 +236,32 @@ public struct MCPApplicationMacro: MemberMacro {
         """
     }
 
-    // MARK: - Exhaustive Dispatch Generation
+    // MARK: - Exhaustive Typed Dispatch
 
-    /// Generates a `callTool` method with exhaustive switch dispatch.
-    /// Each branch creates the concrete tool type, applies arguments, and invokes.
-    static func generateCallTool(
+    /// Generates the private, exhaustive `_invokeTool` switch — the single
+    /// place every entry point (typed, string-keyed) reaches the tools. Each
+    /// branch operates on the tool's concrete configured instance.
+    static func generateInvokeSwitch(
         enumName: String,
         toolProperties: [ToolPropertyInfo]
     ) -> String {
-        let cases = toolProperties.map { prop in
-            let open = prop.isDebugOnly ? "#if DEBUG\n        " : ""
-            let close = prop.isDebugOnly ? "\n        #endif" : ""
-            return """
-            \(open)case .\(prop.name):
-                    var tool = self.\(prop.name)
-                    try tool.apply(arguments: arguments)
-                    return try await tool.invoke(context: MCPContext(arguments: arguments))\(close)
-            """
+        let cases = toolProperties.map { prop -> String in
+            let branch =
+                "        case .\(prop.name):\n" +
+                "            var tool = self.\(prop.name)\n" +
+                "            try tool.apply(arguments: arguments)\n" +
+                "            return try await tool.invoke(context: context)"
+            if prop.isDebugOnly {
+                return "#if DEBUG\n" + branch + "\n        #endif"
+            }
+            return branch
         }.joined(separator: "\n")
 
         return """
-        /// Exhaustive dispatch for all registered tools.
-        /// Each tool's concrete type is known in its branch — no type erasure.
-        func callTool(_ id: \(enumName), arguments: [String: Any]) async throws -> MCPToolResult {
+        /// Compile-time-known exhaustive dispatch generated by @MCPApplication.
+        /// Selected by every entry point so the tools are reached through
+        /// concrete types — no type erasure.
+        private func _invokeTool(_ id: \(enumName), arguments: [String: Any], context: MCPContext) async throws -> MCPToolResult {
             switch id {
         \(cases)
             }
@@ -192,35 +269,129 @@ public struct MCPApplicationMacro: MemberMacro {
         """
     }
 
+    /// Generates the typed, id-keyed entry point (no caller context).
+    static func generateTypedCallTool(enumName: String) -> String {
+        """
+        /// Invokes a tool by its compile-time identifier.
+        func callTool(_ id: \(enumName), arguments: [String: Any]) async throws -> MCPToolResult {
+            try await _invokeTool(id, arguments: arguments, context: MCPContext(arguments: arguments))
+        }
+        """
+    }
+
+    // MARK: - Dispatcher Surface
+
+    /// Generates the registered-name → ToolID mapping (if-chains over each
+    /// tool's static `toolName`, since a tool's registered name comes from its
+    /// configuration, not from the property name).
+    static func generateToolIDLookup(
+        enumName: String,
+        toolProperties: [ToolPropertyInfo]
+    ) -> String {
+        let checks = toolProperties.map { prop -> String in
+            let check = "    if name == \(prop.typeName).toolName { return .\(prop.name) }"
+            if prop.isDebugOnly {
+                return "#if DEBUG\n" + check + "\n    #endif"
+            }
+            return check
+        }.joined(separator: "\n")
+
+        return """
+        /// Maps a registered tool name to its compile-time identifier.
+        func toolID(named name: String) -> \(enumName)? {
+        \(checks)
+            return nil
+        }
+        """
+    }
+
+    /// Generates the per-tool access gate backed by each tool's static
+    /// configuration, so the server enforces authorization before dispatch.
+    static func generateRequiredAccess(
+        enumName: String,
+        toolProperties: [ToolPropertyInfo]
+    ) -> String {
+        let cases = toolProperties.map { prop -> String in
+            let branch =
+                "        case .\(prop.name):\n" +
+                "            return \(prop.typeName).configuration.requiredAccess"
+            if prop.isDebugOnly {
+                return "#if DEBUG\n" + branch + "\n        #endif"
+            }
+            return branch
+        }.joined(separator: "\n")
+
+        return """
+        /// The access level a caller must satisfy to invoke the named tool.
+        func requiredAccess(named name: String) -> AccessLevel? {
+            guard let id = toolID(named: name) else { return nil }
+            switch id {
+        \(cases)
+            }
+        }
+        """
+    }
+
+    /// Generates the string-keyed entry point into the typed dispatch.
+    static func generateStringCallTool(enumName: String) -> String {
+        """
+        /// Invokes the named tool through the exhaustive typed dispatch.
+        func callTool(named name: String, arguments: [String: Any], context: MCPContext) async throws -> MCPToolResult? {
+            guard let id = toolID(named: name) else { return nil }
+            return try await _invokeTool(id, arguments: arguments, context: context)
+        }
+        """
+    }
+
+    /// Generates the `tools/list` catalog, filtered by the caller's access
+    /// level, using each tool's static configuration and parameter metadata.
+    static func generateToolCatalog(toolProperties: [ToolPropertyInfo]) -> String {
+        let entries = toolProperties.map { prop -> String in
+            let branch =
+                "    if callerAccessLevel >= \(prop.typeName).configuration.requiredAccess {\n" +
+                "        catalog.append(MCPToolDescriptor(\n" +
+                "            name: \(prop.typeName).toolName,\n" +
+                "            description: \(prop.typeName).configuration.description,\n" +
+                "            parameters: \(prop.typeName).discoverParameters()\n" +
+                "        ))\n" +
+                "    }"
+            if prop.isDebugOnly {
+                return "#if DEBUG\n" + branch + "\n    #endif"
+            }
+            return branch
+        }.joined(separator: "\n")
+
+        return """
+        /// The `tools/list` catalog for a caller of the given access level.
+        func toolCatalog(for callerAccessLevel: AccessLevel) -> [MCPToolDescriptor] {
+            var catalog: [MCPToolDescriptor] = []
+        \(entries)
+            return catalog
+        }
+        """
+    }
+
     // MARK: - Main Function Generation
 
     /// Generates the `static func main()` body.
+    ///
+    /// The server is constructed with the app as its ``MCPToolDispatcher`` —
+    /// no registration loop, no existential tool array. The dispatcher feeds
+    /// both `tools/list` and `tools/call`.
     static func generateMain(
         structName: String,
         serverName: String,
         serverVersion: String,
         addressArg: String?,
-        transportArg: String?,
-        toolProperties: [ToolPropertyInfo]
+        transportArg: String?
     ) -> String {
-        // Build the server initialization with the requested transport.
-        // Debug-only tools are guarded so their registration is compiled out of
-        // release builds — the registry, tools/list, and tools/call all feed
-        // from this registration list, so an unguarded entry would expose
-        // debug tools in production.
-        let toolList = toolProperties.map { prop in
-            if prop.isDebugOnly {
-                return "            #if DEBUG\n            app.\(prop.name)\n            #endif"
-            }
-            return "            app.\(prop.name)"
-        }.joined(separator: "\n")
         let serverInit: String
         if let transport = transportArg {
-            serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", transport: \(transport)) {\n\(toolList)\n        }"
+            serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", transport: \(transport), dispatcher: app)"
         } else if let address = addressArg {
-            serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", address: \(address)) {\n\(toolList)\n        }"
+            serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", address: \(address), dispatcher: app)"
         } else {
-            serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\") {\n\(toolList)\n        }"
+            serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", dispatcher: app)"
         }
 
         return """

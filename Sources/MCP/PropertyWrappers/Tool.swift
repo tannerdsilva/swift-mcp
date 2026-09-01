@@ -53,3 +53,11 @@ public struct Tool<T: MCPTool> {
         self.available = available
     }
 }
+
+extension Tool: Sendable where T: MCPTool {
+    // `wrappedValue` is `Sendable` (MCPTool requires it) and `available` is a
+    // `Sendable` enum, so the wrapper is unconditionally Sendable for its
+    // generic signature. This lets @MCPApplication app structs (which hold
+    // @Tool properties and now conform to the Sendable MCPToolDispatcher)
+    // satisfy strict concurrency.
+}

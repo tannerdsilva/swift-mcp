@@ -93,14 +93,17 @@ either usage.
 3. Generates an extension with ``MCPTool`` conformance — including static
    `discoverParameters()` and `apply(arguments:)`.
 
-``MCPApplication`` is a ``@attached(member)`` macro. It:
+``MCPApplication`` is a ``@attached(member)`` + ``@attached(extension)``
+macro. It:
 
 1. Reads all `@Tool` property values.
 2. Generates a ``MCPToolID``-conforming enum with one case per tool.
-3. Generates an exhaustive `callTool(_:arguments:)` dispatch switch that
-   preserves each tool's concrete type.
-4. Generates a `static func main()` that builds an ``MCPServer``, registers
-   every `@Tool`, and runs it via ``MCPServer/runService()``.
+3. Generates a private, exhaustive `_invokeTool` switch that preserves each
+   tool's concrete type — the single spot every entry point reaches.
+4. Generates a ``MCPToolDispatcher`` conformance so the server serves
+   `tools/list` and `tools/call` through that typed switch.
+5. Generates a `static func main()` that builds an ``MCPServer`` with the
+   app as its dispatcher and runs it via ``MCPServer/runService()``.
 
 The macro implementation lives in the separate `MCPMacros` target, which the
 `MCP` library target depends on. This keeps SwiftSyntax out of the runtime
@@ -114,17 +117,41 @@ The ``MCPTransport`` protocol abstracts the communication channel. The default
 stdout. ``TCPTransport`` binds to IPv4, IPv6, dual-stack, or Unix domain socket
 addresses. Custom transports (HTTP+SSE, WebSocket, etc.) can be implemented by
 conforming to the protocol and injecting them via
-``MCPServer/init(name:version:transport:tools:)``.
+``MCPServer/init(name:version:transport:dispatcher:tools:)``.
 
-### Compile-time uniqueness and dispatch
+### Compile-time dispatch, end to end
 
-``MCPApplication`` generates a ``MCPToolID`` enum with one case per tool, plus
-an exhaustive `callTool(_:arguments:)` switch that keeps the concrete tool type
-in every branch — no `any MCPTool` erasure — when called directly. The server's
-standard `tools/call` route does not use it: `main()` registers the tools into
-the server's type-erased registry, which dispatches by name. Use
-`callTool(_:arguments:)` when you want a type-checked, exhaustive invocation
-path from your own code (for example, to route or test commands).
+A macro-generated server is served entirely through typed dispatch. The
+``MCPToolDispatcher`` surface that ``MCPApplication`` synthesizes builds
+`tools/list` and `tools/call` from each tool's **static** configuration and
+parameter metadata — the `_invokeTool` switch selects the concrete type per
+branch, so no `any MCPTool` exists in the macro path. The only existential a
+macro-generated server holds is the single `dispatcher` reference itself
+(plus the intrinsic JSON/transport/`Codable` boundaries below). Debug-only
+tools are guarded by `#if DEBUG` in every generated artifact (enum case,
+switch branch, catalog entry, access gate), so a release build neither lists
+nor invokes them.
+
+### Accepted type erasure
+
+The strict core deliberately keeps a small, documented set of exclusions —
+removing any of them would cost ergonomics without buying hot-path
+performance:
+
+- **The JSON boundary.** `tools/call` arguments and `tools/list` schemas are
+  heterogeneous JSON: `[String: Any]` at the wire, `AnyCodable` in the
+  protocol layer. The macro-generated `apply` extracts each parameter onto
+  concrete wrapper types, so `Any` never crosses into a tool.
+- **`MCPTransport`.** One value held per server; dispatch is a single
+  interface call on `start`/`stop` per lifetime — zero per-message cost.
+- **`any Encoder` / `any Decoder`.** Part of the `Codable` contract itself.
+- **The dynamic registry.** ``MCPServer/register(_:)`` and
+  ``MCPServer/registerInstance(_:instance:)`` remain for hand-wired and hybrid
+  servers. A server may hold both a dispatcher (macro-generated tools) and
+  registered tools; the dispatcher is consulted first for both listing and
+  invocation. Builder-based registration
+  (``MCPServer/init(name:version:dispatcher:tools:)``) preserves concrete
+  types all the way to registration via a pack-based ``MCPToolBuilder``.
 
 ### ServiceLifecycle integration
 

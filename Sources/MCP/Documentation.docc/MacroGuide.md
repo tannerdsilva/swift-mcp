@@ -223,10 +223,14 @@ Applied to a struct with ``@Tool`` properties, ``MCPApplication`` generates:
 
 1. **``MCPToolID`` enum** — one case per ``@Tool`` property, providing
    compile-time unique tool names.
-2. **Exhaustive dispatch** — a `callTool` method with a switch over the enum,
-   each branch using the concrete tool type.
-3. **`main()` entry point** — creates the server, registers every `@Tool`, and
-   runs via ``MCPServer/runService()``.
+2. **Exhaustive typed dispatch** — a private `_invokeTool` switch over the
+   enum, each branch using the tool's concrete configured instance.
+3. **``MCPToolDispatcher`` conformance** — the server answers `tools/list`
+   and `tools/call` through that typed switch (access gate, catalog, and
+   dispatch all generated from the tools' static configuration). No runtime
+   type erasure in the macro path.
+4. **`main()` entry point** — creates the server with the app as its
+   dispatcher and runs via ``MCPServer/runService()``.
 
 ### Usage
 
@@ -242,7 +246,7 @@ struct MyApp {
 > The generated `static func main()` is only invoked when the struct is also
 > annotated with `@main`.
 
-### Conditional Registration
+### Conditional Inclusion
 
 Use the `available` parameter for debug-only tools:
 
@@ -250,7 +254,9 @@ Use the `available` parameter for debug-only tools:
 @Tool(available: .debug) var debug = DebugTool()
 ```
 
-The macro wraps registration and dispatch in `#if DEBUG`.
+The macro wraps the tool's enum case, dispatch branch, catalog entry, and
+access gate in `#if DEBUG`, so a release build neither lists it nor invokes
+it.
 
 ### Address Binding
 

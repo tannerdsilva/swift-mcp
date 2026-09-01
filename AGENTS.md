@@ -64,8 +64,9 @@ swift-mcp ships four macros that eliminate boilerplate at compile time:
 
 - `@MCPCommand` — generates an `MCPTool` conformance in an extension from a struct with a `run()` method. The struct must declare exactly one `run()`; its `async`/`throws`/`Void` shape is detected at compile time and the generated code carries only the matching `try`/`await` prefix. Property wrappers map transparently: `@Argument` (required), `@Option` (optional with default), `@Flag` (Bool, defaults false), `@OptionGroup` (flattened at compile time).
 - `@FuncTool` — generates an `MCPTool`-conforming struct from a `static` function nested in a type. Any return type is supported and rendered via `String(describing:)`; `Void` yields an empty text block. `_`-labeled, `inout`, and variadic parameters are rejected with diagnostics.
-- `@MCPApplication` — generates a server entry point: a `ToolID` enum, exhaustive `callTool(_:arguments:)` dispatch, and a `main()` that registers each `@Tool` property (used with `@main`).
+- `@MCPApplication` — generates a `<Name>_ToolID` enum, an exhaustive typed dispatch switch (`_invokeTool`), a `MCPToolDispatcher` conformance (catalog, access gate, string dispatch), and a `main()` that runs the server with the app as its dispatcher (used with `@main`). Debug-only `@Tool(available: .debug)` entries are `#if DEBUG`-guarded in every generated artifact (enum case, switch, catalog, access gate). The dispatcher is the only existential in the macro path; servers may also hold dynamically registered tools via `register`/`registerInstance` (dispatcher is consulted first).
 - `@MCPOptionGroup` — generates `StaticMCPGroup` metadata so option groups flatten at compile time.
+- `MCPToolBuilder` — pack-based result builder; each tool expression keeps its concrete type through the generic server initializers (no `[any MCPTool]` array; flat lists only — hand-written servers needing dynamic selection use `register`/`registerInstance`).
 
 ## Parameter Wrappers
 

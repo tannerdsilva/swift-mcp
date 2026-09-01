@@ -115,7 +115,7 @@ public macro MCPCommand(
 @attached(extension, conformances: StaticMCPGroup, names: named(mcpParameters), named(mcpApply))
 public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOptionGroupMacro")
 
-/// A macro that generates a `main()` entry point, a `ToolID` enum, and
+/// A macro that generates a typed `MCPToolDispatcher`, a `ToolID` enum, and
 /// exhaustive dispatch for an MCP server application.
 ///
 /// Apply this macro to a struct whose properties are marked with ``Tool``.
@@ -123,10 +123,14 @@ public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOp
 ///
 /// 1. A ``MCPToolID``-conforming enum with one case per ``Tool`` property,
 ///    providing compile-time unique tool names.
-/// 2. A `callTool(_:arguments:)` method with exhaustive `switch` dispatch
-///    that preserves each tool's concrete type.
-/// 3. A `static func main()` that creates an ``MCPServer``, registers each
-///    ``Tool`` property, and starts the server via ``MCPServer/runService()``.
+/// 2. A typed `callTool(_:arguments:context:)` method with exhaustive `switch`
+///    dispatch that preserves each tool's concrete type.
+/// 3. A ``MCPToolDispatcher`` conformance — `toolID(named:)`,
+///    `requiredAccess(named:)`, `callTool(named:arguments:context:)`, and
+///    `toolCatalog(for:)` — so the server serves `tools/list` and
+///    `tools/call` through typed dispatch with no runtime type erasure.
+/// 4. A `static func main()` that creates an ``MCPServer`` with the app as
+///    its dispatcher and runs it via ``MCPServer/runService()``.
 ///
 /// ## Basic Usage
 ///
@@ -142,16 +146,18 @@ public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOp
 /// ```swift
 /// static func main() async throws {
 ///     let app = Self()
-///     let server = MCPServer(name: "demo", version: "1.0.0")
-///     server.register(app.greet)
-///     server.register(app.calculate)
+///     let server = MCPServer(name: "demo", version: "1.0.0", dispatcher: app)
 ///     try await server.runService()
 /// }
 /// ```
 ///
+/// Every line of dispatch the server performs is generated from the concrete
+/// tool types (`Greet`, `Calculate`) — the server holds only one existential:
+/// the `dispatcher` reference itself.
+///
 /// ## Debug-Only Tools
 ///
-/// Use the `available` parameter to conditionally register tools:
+/// Use the `available` parameter to conditionally include tools:
 ///
 /// ```swift
 /// @MCPApplication(name: "demo", version: "1.0.0")
@@ -161,8 +167,9 @@ public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOp
 /// }
 /// ```
 ///
-/// The debug tool's registration and dispatch branch are wrapped in
-/// `#if DEBUG` / `#endif`.
+/// The debug tool's enum case, dispatch branch, catalog entry, and access gate
+/// are all wrapped in `#if DEBUG` / `#endif`, so a release build neither lists
+/// nor invokes it.
 ///
 /// ## Address Binding
 ///
@@ -195,39 +202,8 @@ public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOp
 ///     @Tool var greet = Greet()
 /// }
 /// ```
-///
-/// ## Generated Code
-///
-/// For the basic example above, the macro generates:
-///
-/// ```swift
-/// enum MyApp_ToolID: String, MCPToolID {
-///     case greet
-///     case calculate
-/// }
-///
-/// func callTool(_ id: MyApp_ToolID, arguments: [String: Any]) async throws -> MCPToolResult {
-///     switch id {
-///     case .greet:
-///         var tool = Greet()
-///         try tool.apply(arguments: arguments)
-///         return try await tool.invoke(context: MCPContext(arguments: arguments))
-///     case .calculate:
-///         var tool = Calculate()
-///         try tool.apply(arguments: arguments)
-///         return try await tool.invoke(context: MCPContext(arguments: arguments))
-///     }
-/// }
-///
-/// static func main() async throws {
-///     let app = MyApp()
-///     let server = MCPServer(name: "demo", version: "1.0.0")
-///     server.register(app.greet)
-///     server.register(app.calculate)
-///     try await server.runService()
-/// }
-/// ```
-@attached(member, names: named(main), named(callTool), arbitrary)
+@attached(member, names: named(main), named(callTool), named(_invokeTool), named(toolID), named(requiredAccess), named(toolCatalog), arbitrary)
+@attached(extension, conformances: MCPToolDispatcher)
 public macro MCPApplication(
     name: String,
     version: String,

@@ -174,6 +174,22 @@ struct ConfiguredApp {
     @Tool var prefixed = PrefixedEchoTool(prefix: "from-config")
 }
 
+// A tool gated behind the highest access level, used to prove the generated
+// dispatcher's access gate answers from static configuration.
+struct RootOnlyTool: MCPTool {
+    static let configuration = MCPToolConfiguration(
+        description: "Root-gated probe",
+        name: "rootOnly",
+        requiredAccess: .root
+    )
+    func invoke(context: MCPContext) async throws -> MCPToolResult { .text("root ok") }
+}
+
+@MCPApplication(name: "gated-app", version: "1.0.0")
+struct GatedApp {
+    @Tool var rootOnly = RootOnlyTool()
+}
+
 // A tool that fails at execution time with an arbitrary thrown error.
 private enum RuntimeBoom: Error, LocalizedError {
     case detonated
@@ -1045,15 +1061,13 @@ final class MockTransport: MCPTransport, @unchecked Sendable {
 
 /// Helper: runs a server with the given transport in a background task,
 /// waits for message processing, then stops the server.
-private func runTestServer(
+private func runTestServer<each Tool: MCPTool>(
     transport: MockTransport,
     name: String = "TestServer",
     version: String = "1.0.0",
-    @MCPToolBuilder tools: () -> [any MCPTool] = { [] }
+    @MCPToolBuilder tools: () -> (repeat each Tool) = {}
 ) async throws {
-    let server = MCPServer(name: name, version: version, transport: transport) {
-        for tool in tools() { tool }
-    }
+    let server = MCPServer(name: name, version: version, transport: transport, tools: tools)
 
     // Run the server in a background task
     let serverTask = Task { try await server.runService() }
@@ -1320,6 +1334,120 @@ func mcpApplicationCallToolPreservesConfiguration() async throws {
     } else {
         Issue.record("Expected text content")
     }
+}
+
+@Test("Dispatcher surface: access gate, catalog, string dispatch")
+func dispatcherSurfaceMethods() async throws {
+    let app = AppServer()
+    #expect(app.requiredAccess(named: "greet") == .public)
+    #expect(app.requiredAccess(named: "missing") == nil)
+
+    let catalog = app.toolCatalog(for: .public)
+    #expect(catalog.map(\.name).sorted() == ["calculate", "greet"])
+
+    let unknown = try await app.callTool(named: "missing", arguments: [:], context: MCPContext(arguments: [:]))
+    #expect(unknown == nil)
+
+    let args = ["name": "Skeptic"]
+    let result = try await app.callTool(named: "greet", arguments: args, context: MCPContext(arguments: args))
+    #expect(result?.isError == false)
+    if case .text(let text) = result?.content[0] {
+        #expect(text == "Hello, Skeptic!")
+    } else {
+        Issue.record("Expected text content")
+    }
+}
+
+@Test("Dispatcher routes tools/call through the generated typed dispatch")
+func dispatcherRoutesToolsCall() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "greet", "arguments": ["name": "Disp"]]
+        ])
+    ]
+
+    let server = MCPServer(name: "D", version: "1.0.0", transport: transport, dispatcher: AppServer())
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let result = response?["result"] as? [String: Any]
+    let content = result?["content"] as? [[String: Any]]
+    #expect(content?.first?["text"] as? String == "Hello, Disp!")
+}
+
+@Test("Dispatcher serves the tools/list catalog")
+func dispatcherServesCatalog() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
+    ]
+
+    let server = MCPServer(name: "D", version: "1.0.0", transport: transport, dispatcher: AppServer())
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let tools = (response?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+    #expect(tools?.compactMap { $0["name"] as? String }.sorted() == ["calculate", "greet"])
+}
+
+@Test("Dispatcher denies calls below the required access level")
+func dispatcherDeniesBelowRequiredAccess() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "rootOnly", "arguments": [:]]
+        ])
+    ]
+
+    // MockTransport runs the handler with a .admin caller; the gated tool
+    // requires .root — the server answers -32000 without invoking.
+    let server = MCPServer(name: "D", version: "1.0.0", transport: transport, dispatcher: GatedApp())
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let error = response?["error"] as? [String: Any]
+    #expect(error?["code"] as? Int == -32000)
+}
+
+@Test("Dispatcher catalog respects the caller's access level")
+func dispatcherCatalogFiltersByAccess() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
+    ]
+
+    // .admin caller cannot see a .root tool — the generated catalog omits it.
+    let server = MCPServer(name: "D", version: "1.0.0", transport: transport, dispatcher: GatedApp())
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let tools = (response?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+    #expect(tools?.isEmpty == true)
+}
+
+@Test("Hybrid server serves both dispatcher and dynamically registered tools")
+func hybridDispatcherAndRegistry() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
+    ]
+    let server = MCPServer(name: "D", version: "1.0.0", transport: transport, dispatcher: AppServer()) {
+        PrefixedEchoTool(prefix: "dyn")
+    }
+    try await server.runService()
+
+    // greet/calculate come from the dispatcher, prefixedEcho from the registry.
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let tools = (response?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+    #expect(tools?.compactMap { $0["name"] as? String }.sorted() == ["calculate", "greet", "prefixedEcho"])
 }
 
 @Test("Server rejects a wrong jsonrpc version with -32600")
@@ -2431,7 +2559,7 @@ func emptyBuilderClosureWorks() async throws {
     transport.receivedMessages = [
         try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]]),
     ]
-    let server = MCPServer(name: "T", version: "1.0.0", transport: transport, tools: { [] })
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
     try await server.runService()
 
     guard let data = transport.sentMessages.first else {

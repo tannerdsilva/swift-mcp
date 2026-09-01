@@ -95,6 +95,11 @@ public final class MCPServer: Service, @unchecked Sendable {
     private let toolsLock = Mutex<()>(())
     private var _logger: Logger
     private let transport: any MCPTransport
+    /// Optional compile-time-known tool dispatch surface (macro-generated).
+    ///
+    /// Consulted before the dynamic registry for both `tools/list` and
+    /// `tools/call`. `let` and `Sendable` — no synchronization needed.
+    private let toolDispatcher: (any MCPToolDispatcher)?
 
     /// The logger used by this server.
     public var logger: Logger { _logger }
@@ -105,31 +110,35 @@ public final class MCPServer: Service, @unchecked Sendable {
         set { _logger.logLevel = newValue }
     }
 
-    /// Creates a new MCP server.
+    /// Creates a new MCP server over the standard stdio transport.
     ///
     /// - Parameters:
     ///   - name: The server name (sent to clients during initialization).
     ///   - version: The server version (e.g. "1.0.0").
+    ///   - dispatcher: An optional compile-time-known tool dispatcher — the
+    ///     macro-generated surface from ``MCPApplication``. Tools it knows are
+    ///     served through typed, exhaustive dispatch; tools added via
+    ///     ``register(_:)``/``registerInstance(_:instance:)`` remain served
+    ///     through the dynamic registry.
     ///   - tools: A ``MCPToolBuilder`` closure that returns tools to register.
-    ///     Each tool instance is registered directly, so configuration passed
-    ///     to a tool's initializer is preserved at invocation time. Pass an
-    ///     empty closure `{}` to register tools later via ``register(_:)``.
-    public init(
+    ///     Each tool is carried concretely by the builder and registered as an
+    ///     instance, so configuration passed to its initializer survives at
+    ///     invocation time. Pass an empty closure `{}` to register tools later.
+    public convenience init<each Tool: MCPTool>(
         name: String,
         version: String,
-        @MCPToolBuilder tools: () -> [any MCPTool]
+        dispatcher: (any MCPToolDispatcher)? = nil,
+        @MCPToolBuilder tools: () -> (repeat each Tool) = {}
     ) {
-        self.name = name
-        self.version = version
-        self.tools = [:]
-        self._logger = Logger(label: "mcp.server")
-        self.transport = StdioTransport(logger: self._logger)
-        for tool in tools() {
-            // Register the instance itself so any configuration the caller
-            // passed to the tool's initializer survives into invocation —
-            // register(_:) stores only the type and would silently discard it.
-            self.registerInstance(type(of: tool).toolName, instance: tool)
-        }
+        let logger = Logger(label: "mcp.server")
+        self.init(
+            name: name,
+            version: version,
+            transport: StdioTransport(logger: logger),
+            logger: logger,
+            dispatcher: dispatcher,
+            tools: tools
+        )
     }
 
     /// Creates a new MCP server bound to a specific address.
@@ -145,32 +154,30 @@ public final class MCPServer: Service, @unchecked Sendable {
     ///   - allowIPv4MappedIPv6: When `true`, binding to an IPv6 address like
     ///     `::` also accepts IPv4 connections. On Darwin this is default; on
     ///     Linux this disables `IPV6_V6ONLY`. Defaults to `false`.
+    ///   - dispatcher: An optional compile-time-known tool dispatcher (see
+    ///     ``init(name:version:dispatcher:tools:)``).
     ///   - tools: A ``MCPToolBuilder`` closure that returns tools to register.
-    ///     Each tool instance is registered directly, so configuration passed
-    ///     to a tool's initializer is preserved at invocation time. Pass an
-    ///     empty closure `{}` to register tools later via ``registerInstance(_:instance:)``.
-    public init(
+    public convenience init<each Tool: MCPTool>(
         name: String,
         version: String,
         address: ServerAddress,
         allowIPv4MappedIPv6: Bool = false,
-        @MCPToolBuilder tools: () -> [any MCPTool]
+        dispatcher: (any MCPToolDispatcher)? = nil,
+        @MCPToolBuilder tools: () -> (repeat each Tool) = {}
     ) {
-        self.name = name
-        self.version = version
-        self.tools = [:]
-        self._logger = Logger(label: "mcp.server")
-        self.transport = TCPTransport(
-            address: address,
-            allowIPv4MappedIPv6: allowIPv4MappedIPv6,
-            logger: self._logger
+        let logger = Logger(label: "mcp.server")
+        self.init(
+            name: name,
+            version: version,
+            transport: TCPTransport(
+                address: address,
+                allowIPv4MappedIPv6: allowIPv4MappedIPv6,
+                logger: logger
+            ),
+            logger: logger,
+            dispatcher: dispatcher,
+            tools: tools
         )
-        for tool in tools() {
-            // Register the instance itself so any configuration the caller
-            // passed to the tool's initializer survives into invocation —
-            // register(_:) stores only the type and would silently discard it.
-            self.registerInstance(type(of: tool).toolName, instance: tool)
-        }
     }
 
     /// Creates a new MCP server bound to a specific address with a caller
@@ -189,16 +196,19 @@ public final class MCPServer: Service, @unchecked Sendable {
     ///     `::` also accepts IPv4 connections. Defaults to `false`.
     ///   - accessResolver: A closure mapping a caller's source address string
     ///     to an ``AccessLevel``. Run once per connection, at accept time.
+    ///   - dispatcher: An optional compile-time-known tool dispatcher (see
+    ///     ``init(name:version:dispatcher:tools:)``).
     ///   - tools: A ``MCPToolBuilder`` closure that returns tools to register.
-    ///     Pass an empty closure `{}` to register tools later via ``registerInstance(_:instance:)``.
-    public convenience init(
+    public convenience init<each Tool: MCPTool>(
         name: String,
         version: String,
         address: ServerAddress,
         allowIPv4MappedIPv6: Bool = false,
         accessResolver: @escaping @Sendable (String) -> AccessLevel,
-        @MCPToolBuilder tools: () -> [any MCPTool]
+        dispatcher: (any MCPToolDispatcher)? = nil,
+        @MCPToolBuilder tools: () -> (repeat each Tool) = {}
     ) {
+        let logger = Logger(label: "mcp.server")
         self.init(
             name: name,
             version: version,
@@ -207,6 +217,8 @@ public final class MCPServer: Service, @unchecked Sendable {
                 allowIPv4MappedIPv6: allowIPv4MappedIPv6,
                 accessResolver: accessResolver
             ),
+            logger: logger,
+            dispatcher: dispatcher,
             tools: tools
         )
     }
@@ -221,20 +233,46 @@ public final class MCPServer: Service, @unchecked Sendable {
     ///   - name: The server name.
     ///   - version: The server version.
     ///   - transport: The transport to use.
+    ///   - dispatcher: An optional compile-time-known tool dispatcher (see
+    ///     ``init(name:version:dispatcher:tools:)``).
     ///   - tools: A ``MCPToolBuilder`` closure that returns tools to register.
-    ///     Pass an empty closure `{}` to register tools later via ``registerInstance(_:instance:)``.
-    public init(
+    public convenience init<each Tool: MCPTool>(
         name: String,
         version: String,
         transport: any MCPTransport,
-        @MCPToolBuilder tools: () -> [any MCPTool] = { [] }
+        dispatcher: (any MCPToolDispatcher)? = nil,
+        @MCPToolBuilder tools: () -> (repeat each Tool) = {}
+    ) {
+        self.init(
+            name: name,
+            version: version,
+            transport: transport,
+            logger: Logger(label: "mcp.server"),
+            dispatcher: dispatcher,
+            tools: tools
+        )
+    }
+
+    /// Designated initializer shared by the conveniences above.
+    ///
+    /// `logger` is owned by the server; conveniences that construct a
+    /// transport pass the same instance so transport-level log settings
+    /// (e.g. `.trace` for accept-resolver decisions) follow ``logLevel``.
+    private init<each Tool: MCPTool>(
+        name: String,
+        version: String,
+        transport: any MCPTransport,
+        logger: Logger,
+        dispatcher: (any MCPToolDispatcher)? = nil,
+        @MCPToolBuilder tools: () -> (repeat each Tool) = {}
     ) {
         self.name = name
         self.version = version
         self.tools = [:]
-        self._logger = Logger(label: "mcp.server")
         self.transport = transport
-        for tool in tools() {
+        self._logger = logger
+        self.toolDispatcher = dispatcher
+        for tool in repeat each tools() {
             // Register the instance itself so any configuration the caller
             // passed to the tool's initializer survives into invocation —
             // register(_:) stores only the type and would silently discard it.
@@ -571,6 +609,14 @@ public final class MCPServer: Service, @unchecked Sendable {
     private func handleToolsList(id: JSONRPCID, caller: MCPCallerInfo) async throws -> Data {
         var toolDefinitions: [MCPToolDefinition] = []
 
+        // Dispatcher (macro-generated, typed) catalog first — the generated
+        // implementation filters by the caller's access level itself.
+        if let dispatcher = toolDispatcher {
+            for descriptor in dispatcher.toolCatalog(for: caller.accessLevel) {
+                toolDefinitions.append(toolDefinition(from: descriptor))
+            }
+        }
+
         for (_, toolType) in snapshotToolTypes() {
             let config = toolType.configuration
 
@@ -605,6 +651,15 @@ public final class MCPServer: Service, @unchecked Sendable {
         return makeSuccessResponse(id: id, result: ToolsListResult(tools: toolDefinitions))
     }
 
+    /// Converts a compile-time-known tool descriptor into a wire definition.
+    private func toolDefinition(from descriptor: MCPToolDescriptor) -> MCPToolDefinition {
+        MCPToolDefinition(
+            name: descriptor.name,
+            description: descriptor.description.isEmpty ? nil : descriptor.description,
+            inputSchema: JSONSchemaBuilder.buildObjectSchema(properties: descriptor.parameters)
+        )
+    }
+
     // MARK: - Tools Call
 
     /// Handles the `tools/call` request.
@@ -622,6 +677,45 @@ public final class MCPServer: Service, @unchecked Sendable {
 
         let arguments = (params["arguments"]?.value as? [String: Any]) ?? [:]
 
+        // Dispatcher (macro-generated, typed) path first: the server keeps
+        // authorization policy in one place by reading the tool's required
+        // access from the dispatcher, then drops into the exhaustive typed
+        // switch for the invocation itself.
+        if let dispatcher = toolDispatcher {
+            guard let requiredAccess = dispatcher.requiredAccess(named: toolName) else {
+                // Unknown to the dispatcher — fall through to the dynamic
+                // registry so hybrid servers keep hand-registered tools.
+                return await handleToolsCallFromRegistry(
+                    id: id, toolName: toolName, arguments: arguments, caller: caller
+                )
+            }
+            guard caller.accessLevel >= requiredAccess else {
+                _logger.warning("Access denied for tool: \(toolName) (caller level \(caller.accessLevel.rawValue))")
+                return makeErrorResponse(id: id, code: -32000, message: "Access denied: \(toolName)")
+            }
+
+            return await invokeTool(id: id, toolName: toolName, arguments: arguments, caller: caller) {
+                guard let result = try await dispatcher.callTool(
+                    named: toolName,
+                    arguments: arguments,
+                    context: MCPContext(arguments: arguments, callerInfo: caller)
+                ) else {
+                    throw MCPError.toolNotFound(toolName)
+                }
+                return result
+            }
+        }
+
+        return await handleToolsCallFromRegistry(id: id, toolName: toolName, arguments: arguments, caller: caller)
+    }
+
+    /// Resolves a tool through the dynamic registry (type- or instance-path).
+    private func handleToolsCallFromRegistry(
+        id: JSONRPCID,
+        toolName: String,
+        arguments: [String: Any],
+        caller: MCPCallerInfo
+    ) async -> Data {
         if let toolType = toolType(named: toolName) {
             guard caller.accessLevel >= toolType.configuration.requiredAccess else {
                 _logger.warning("Access denied for tool: \(toolName) (caller level \(caller.accessLevel.rawValue))")
@@ -718,44 +812,26 @@ public final class MCPServer: Service, @unchecked Sendable {
     }
 }
 
-/// A result builder for constructing arrays of MCP tools.
+/// A result builder that carries each tool expression with its concrete type.
+///
+/// Unlike an existential-array builder (`[any MCPTool]`), every
+/// ``buildExpression`` result is returned as its own type and combined into a
+/// heterogeneous tuple by ``buildBlock``, so the server's generic initializers
+/// receive the tools concretely — no type erasure at the call site. The price
+/// is that the builder only supports flat lists of tools: conditional blocks
+/// (`if`/`else`) and array literals like `{ [] }` are not representable with
+/// typed packs. Hand-written servers needing dynamic selection should register
+/// tools at runtime with ``MCPServer/register(_:)``/``MCPServer/registerInstance(_:instance:)``.
 @resultBuilder
-public enum MCPToolBuilder: Sendable {
-    /// Combines multiple tool arrays into a single array.
-    public static func buildBlock(_ components: [any MCPTool]...) -> [any MCPTool] {
-        components.flatMap { $0 }
+public enum MCPToolBuilder {
+    /// Preserves a tool expression's concrete type.
+    public static func buildExpression<T: MCPTool>(_ expression: T) -> T {
+        expression
     }
 
-    /// Wraps a single tool expression in an array.
-    public static func buildExpression<T: MCPTool>(_ expression: T) -> [any MCPTool] {
-        [expression]
-    }
-
-    /// Accepts an array of tools (including the empty array) directly.
-    ///
-    /// Enables `{ [] }` and `{ [GetWeather(), Greet()] }` at call sites,
-    /// matching the common dynamic-registration pattern.
-    public static func buildExpression(_ elements: [any MCPTool]) -> [any MCPTool] {
-        elements
-    }
-
-    /// Handles optional tool blocks.
-    public static func buildOptional(_ component: [any MCPTool]?) -> [any MCPTool] {
-        component ?? []
-    }
-
-    /// Handles the first branch of a conditional.
-    public static func buildEither(first component: [any MCPTool]) -> [any MCPTool] {
-        component
-    }
-
-    /// Handles the second branch of a conditional.
-    public static func buildEither(second component: [any MCPTool]) -> [any MCPTool] {
-        component
-    }
-
-    /// Handles array-building from loops.
-    public static func buildArray(_ components: [[any MCPTool]]) -> [any MCPTool] {
-        components.flatMap { $0 }
+    /// Combines tool expressions into a heterogeneous tuple, preserving each
+    /// element's concrete type.
+    public static func buildBlock<each Tool: MCPTool>(_ components: repeat each Tool) -> (repeat each Tool) {
+        (repeat each components)
     }
 }
