@@ -354,10 +354,17 @@ private func floatingPointWholeCoercion<I: BinaryInteger & FixedWidthInteger>(_ 
 /// Decodes a JSON-compatible `Any` value into a concrete `Codable` type.
 ///
 /// The typed JSON-RPC decode path materializes JSON as plain Swift values
-/// (`String`/`Int`/`Double`/`Bool`/`NSNull` and trees of them), so custom
+/// (`String`/`Int`/`Double`/`Bool`/`JSONNull` and trees of them), so custom
 /// `Codable & Sendable` parameter types — enums, structs, optionals — are
 /// decoded by round-tripping that tree through `JSONEncoder`/`JSONDecoder`.
 private func decodeCodableValue<Value: Decodable>(_ value: Any, as type: Value.Type) -> Value? {
+    // The null marker cannot be serialized by JSONSerialization (only
+    // Foundation's NSNull can), so route it straight to JSON `null`: decoding
+    // `null` succeeds for Optional<W> parameters (setting nil) and fails for
+    // non-optional ones (yielding a type mismatch).
+    if value is JSONNull {
+        return try? JSONDecoder().decode(type, from: Data("null".utf8))
+    }
     // `.fragmentsAllowed` so bare scalars (e.g. a String for an enum-typed or
     // Optional<Scalar> parameter) serialize as fragments, not just dictionaries.
     guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]) else { return nil }

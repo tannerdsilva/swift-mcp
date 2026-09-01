@@ -517,9 +517,9 @@ func toolConfigurationWithName() {
 
 @Test("MCPError descriptions")
 func errorDescriptions() {
-    #expect(MCPError.missingArgument("foo").errorDescription == "Missing required argument: foo")
-    #expect(MCPError.typeMismatch(expected: "String", actual: "Int").errorDescription == "Type mismatch: expected String, got Int")
-    #expect(MCPError.toolNotFound("bar").errorDescription == "Tool not found: bar")
+    #expect(MCPError.missingArgument("foo").description == "Missing required argument: foo")
+    #expect(MCPError.typeMismatch(expected: "String", actual: "Int").description == "Type mismatch: expected String, got Int")
+    #expect(MCPError.toolNotFound("bar").description == "Tool not found: bar")
 }
 
 // MARK: - Option Group Tests
@@ -733,12 +733,12 @@ func toolResultErrorCodable() throws {
 
 @Test("MCPError all descriptions")
 func allErrorDescriptions() {
-    #expect(MCPError.missingArgument("x").errorDescription == "Missing required argument: x")
-    #expect(MCPError.typeMismatch(expected: "A", actual: "B").errorDescription == "Type mismatch: expected A, got B")
-    #expect(MCPError.toolNotFound("t").errorDescription == "Tool not found: t")
-    #expect(MCPError.jsonRPCError(code: -1, message: "err").errorDescription == "JSON-RPC error -1: err")
-    #expect(MCPError.transportError("eof").errorDescription == "Transport error: eof")
-    #expect(MCPError.internalError("bug").errorDescription == "Internal error: bug")
+    #expect(MCPError.missingArgument("x").description == "Missing required argument: x")
+    #expect(MCPError.typeMismatch(expected: "A", actual: "B").description == "Type mismatch: expected A, got B")
+    #expect(MCPError.toolNotFound("t").description == "Tool not found: t")
+    #expect(MCPError.jsonRPCError(code: -1, message: "err").description == "JSON-RPC error -1: err")
+    #expect(MCPError.transportError("eof").description == "Transport error: eof")
+    #expect(MCPError.internalError("bug").description == "Internal error: bug")
 }
 
 @Test("MCPError equality")
@@ -1635,9 +1635,32 @@ func numericCoercionWholeDoubleOnly() throws {
 
 @Test("AnyCodable round-trips JSON null")
 func anyCodableNullRoundTrip() throws {
-    let data = try JSONEncoder().encode(AnyCodable(NSNull()))
+    let data = try JSONEncoder().encode(AnyCodable(JSONNull()))
     let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
-    #expect(decoded.value is NSNull)
+    #expect(decoded.value is JSONNull)
+}
+
+@Test("JSON null argument sets an Optional parameter to nil")
+func serverJSONNullOptionalParameter() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "variedTypesCommand", "arguments": ["name": "n", "level": NSNull()]]
+        ])
+    ]
+
+    let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) { VariedTypesCommand() }
+    try await server.runService()
+
+    // The null decoded into Optional "level" as nil — a success, not a type
+    // mismatch (the JSONNull sentinel routes to JSON null, not JSONSerialization).
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    #expect(response?["error"] == nil)
+    let result = response?["result"] as? [String: Any]
+    let content = result?["content"] as? [[String: Any]]
+    #expect(content?.first?["text"] as? String == "n")
 }
 
 @Test("Null argument values produce a type mismatch, not a parse error")

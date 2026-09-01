@@ -9,8 +9,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
-
 // MARK: - MCPTool
 
 /// A type that represents an MCP tool.

@@ -13,6 +13,7 @@ import Foundation
 import Logging
 import NIOCore
 import NIOPosix
+import Synchronization
 
 // MARK: - Channel Handler
 
@@ -175,7 +176,7 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
     private let allowIPv4MappedIPv6: Bool
     private let logger: Logger?
     /// Guards `channel`, `boundAddress`, `isRunning`, and `stopRequested`.
-    private let stateLock = NSLock()
+    private let stateLock = Mutex<()>(())
     private var channel: Channel?
     private var isRunning = false
     /// Set by ``stop()`` so a stop that lands before the listener is bound is
@@ -263,7 +264,7 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
     ///   The handler receives raw JSON-RPC data and caller information, and
     ///   returns optional response data.
     public func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
-        stateLock.withLock {
+        stateLock.withLock { _ in
             isRunning = true
         }
 
@@ -317,7 +318,7 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
         // observed no channel yet (the pre-bind window), it recorded
         // stopRequested — close the fresh listener here so start() returns
         // instead of blocking on the close future forever.
-        let stopWhileBinding: Bool = stateLock.withLock {
+        let stopWhileBinding: Bool = stateLock.withLock { _ in
             self.channel = channel
             self.boundAddress = channel.localAddress
             return stopRequested
@@ -331,7 +332,7 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
             try await channel.closeFuture.get()
         }
 
-        stateLock.withLock {
+        stateLock.withLock { _ in
             self.channel = nil
             self.boundAddress = nil
         }
@@ -343,7 +344,7 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
     /// the moment the channel appears, so ``start(handler:)`` never deadlocks
     /// on a stop that arrived during startup.
     public func stop() async throws {
-        let activeChannel: Channel? = stateLock.withLock {
+        let activeChannel: Channel? = stateLock.withLock { _ in
             stopRequested = true
             isRunning = false
             return channel

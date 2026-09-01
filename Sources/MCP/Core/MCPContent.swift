@@ -9,8 +9,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
-
 /// Content blocks that can be returned from an MCP tool invocation.
 ///
 /// MCP tools return an array of content blocks. The supported types mirror
@@ -173,12 +171,22 @@ public struct MCPToolResult: Sendable, Codable {
     }
 }
 
+/// The JSON `null` marker carried by ``AnyCodable``.
+///
+/// Swift-native replacement for Foundation's `NSNull`: a `null` JSON value is
+/// represented as an instance of this value type, so JSON null round-trips
+/// without any Foundation symbol in the encoding core. Values that reach
+/// `AnyCodable` as `null` (e.g. `{"key": null}`) decode to a `JSONNull` and
+/// encode back as JSON `null`.
+struct JSONNull: Sendable, Hashable {}
+
 /// A type-erased ``Codable`` value for use in structured content.
 ///
 /// ``AnyCodable`` wraps an arbitrary `Any` value and provides ``Codable``
 /// conformance by attempting to encode/decode known types (``String``, ``Int``,
 /// ``Double``, ``Bool``, arrays, and dictionaries). Unknown types are encoded
-/// as their string description.
+/// as their string description. JSON `null` is represented by the internal
+/// ``JSONNull`` marker type.
 ///
 /// This is used internally by the framework for JSON-RPC message serialization
 /// where the exact types are not known at compile time.
@@ -201,7 +209,7 @@ public struct AnyCodable: Codable, @unchecked Sendable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.singleValueContainer()
         switch value {
-        case _ as NSNull: try container.encodeNil()
+        case is JSONNull: try container.encodeNil()
         case let v as String: try container.encode(v)
         case let v as Int: try container.encode(v)
         case let v as Double: try container.encode(v)
@@ -216,11 +224,12 @@ public struct AnyCodable: Codable, @unchecked Sendable {
     /// Decodes a value from the given decoder.
     ///
     /// Attempts to decode known types in order: ``String``, ``Int``, ``Double``,
-    /// ``Bool``, `[String: AnyCodable]`, `[AnyCodable]`. Falls back to encoding
-    /// the raw description as a string to avoid silent data loss.
+    /// ``Bool``, `[String: AnyCodable]`, `[AnyCodable]`. JSON `null` decodes to
+    /// a ``JSONNull`` marker. Falls back to encoding the raw description as a
+    /// string to avoid silent data loss.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if container.decodeNil() { value = NSNull() }
+        if container.decodeNil() { value = JSONNull() }
         else if let v = try? container.decode(String.self) { value = v }
         else if let v = try? container.decode(Int.self) { value = v }
         else if let v = try? container.decode(Double.self) { value = v }

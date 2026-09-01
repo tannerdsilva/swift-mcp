@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
     name: "MCP",
     platforms: [
-        .macOS(.v14),
+        .macOS(.v15),
     ],
     products: [
         .library(

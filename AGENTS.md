@@ -151,5 +151,5 @@ swift package --disable-sandbox generate-documentation   # Build the DocC catalo
 - **All tests use Swift Testing** (`import Testing`, `#expect(...)`, `@Test`).
 - **StrictConcurrency** is implied by Swift 6 language mode; `@unchecked Sendable` is used only where documented (server registries guarded by a lock, transport flags).
 - **Public API** uses `public` visibility; internal types use `internal` as appropriate.
-- **Error types** conform to `Error`, `Sendable`, `Equatable`, and `LocalizedError`.
+- **Error types** conform to `Error`, `Sendable`, `Equatable`, and `CustomStringConvertible` (Foundation-free descriptions; no `LocalizedError`).
 - **File header comments** follow the MIT license header pattern used across Sources.

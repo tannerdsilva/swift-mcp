@@ -12,6 +12,7 @@
 import Foundation
 import Logging
 import ServiceLifecycle
+import Synchronization
 import UnixSignals
 
 /// An MCP server that hosts tools and handles the MCP protocol.
@@ -91,7 +92,7 @@ public final class MCPServer: Service, @unchecked Sendable {
     /// public and documented as runtime-capable, while the transports read the
     /// registries from the message-handling actors — so all access is
     /// serialized through this lock.
-    private let toolsLock = NSLock()
+    private let toolsLock = Mutex<()>(())
     private var _logger: Logger
     private let transport: any MCPTransport
 
@@ -259,7 +260,7 @@ public final class MCPServer: Service, @unchecked Sendable {
     public func register<T: MCPTool>(_ tool: T) {
         let name = T.toolName
         _logger.debug("Registering tool: \(name) (type: \(T.self))")
-        toolsLock.withLock {
+        toolsLock.withLock { _ in
             if tools[name] != nil {
                 _logger.warning("Tool '\(name)' is already registered and will be overwritten")
             }
@@ -281,7 +282,7 @@ public final class MCPServer: Service, @unchecked Sendable {
     /// is guarded against concurrent access with the transports.
     public func registerInstance(_ name: String, instance: any MCPTool) {
         _logger.debug("Registering tool instance: \(name)")
-        toolsLock.withLock {
+        toolsLock.withLock { _ in
             if tools[name] != nil || toolInstances[name] != nil {
                 _logger.warning("Tool '\(name)' is already registered and will be overwritten")
             }
@@ -307,7 +308,7 @@ public final class MCPServer: Service, @unchecked Sendable {
     /// Unregistration is safe to call while the server is running; the registry
     /// is guarded against concurrent access with the transports.
     public func unregister(_ name: String) {
-        let removed: Bool = toolsLock.withLock {
+        let removed: Bool = toolsLock.withLock { _ in
             let typeRemoved = tools.removeValue(forKey: name) != nil
             let instanceRemoved = toolInstances.removeValue(forKey: name) != nil
             return typeRemoved || instanceRemoved
@@ -323,22 +324,22 @@ public final class MCPServer: Service, @unchecked Sendable {
 
     /// Snapshots the type-registered tools under the registry lock.
     private func snapshotToolTypes() -> [(name: String, type: any MCPTool.Type)] {
-        toolsLock.withLock { tools.map { (name: $0.key, type: $0.value) } }
+        toolsLock.withLock { _ in tools.map { (name: $0.key, type: $0.value) } }
     }
 
     /// Snapshots the instance-registered tools under the registry lock.
     private func snapshotToolInstances() -> [(name: String, instance: any MCPTool)] {
-        toolsLock.withLock { toolInstances.map { (name: $0.key, instance: $0.value) } }
+        toolsLock.withLock { _ in toolInstances.map { (name: $0.key, instance: $0.value) } }
     }
 
     /// Looks up a type-registered tool under the registry lock.
     private func toolType(named name: String) -> (any MCPTool.Type)? {
-        toolsLock.withLock { tools[name] }
+        toolsLock.withLock { _ in tools[name] }
     }
 
     /// Looks up an instance-registered tool under the registry lock.
     private func toolInstance(named name: String) -> (any MCPTool)? {
-        toolsLock.withLock { toolInstances[name] }
+        toolsLock.withLock { _ in toolInstances[name] }
     }
 
     // MARK: - Service Conformance
@@ -669,11 +670,11 @@ public final class MCPServer: Service, @unchecked Sendable {
         } catch let error as MCPError {
             switch error {
             case .missingArgument, .typeMismatch, .toolNotFound:
-                _logger.warning("Tool \(toolName) rejected arguments: \(error.localizedDescription)")
-                return makeErrorResponse(id: id, code: -32602, message: error.localizedDescription)
+                _logger.warning("Tool \(toolName) rejected arguments: \(error.description)")
+                return makeErrorResponse(id: id, code: -32602, message: error.description)
             default:
-                _logger.warning("Tool \(toolName) failed: \(error.localizedDescription)")
-                return makeErrorResponse(id: id, code: -32603, message: error.localizedDescription)
+                _logger.warning("Tool \(toolName) failed: \(error.description)")
+                return makeErrorResponse(id: id, code: -32603, message: error.description)
             }
         } catch {
             _logger.warning("Tool \(toolName) execution error: \(error.localizedDescription)")

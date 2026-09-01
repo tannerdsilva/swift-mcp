@@ -9,8 +9,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
-
 /// Errors that can occur in the MCP framework.
 ///
 /// This enum provides a comprehensive set of error cases for the MCP protocol
@@ -78,9 +76,13 @@ public enum MCPError: Error, Sendable, Equatable {
     case accessDenied(String)
 }
 
-extension MCPError: LocalizedError {
-    /// A localized description of the error, suitable for display to the user.
-    public var errorDescription: String? {
+extension MCPError: CustomStringConvertible {
+    /// A human-readable description of the error, suitable for display.
+    ///
+    /// Foundation-free replacement for the `LocalizedError` conformance:
+    /// `String(describing:)` and string interpolation of an `MCPError` yield
+    /// these messages.
+    public var description: String {
         switch self {
         case .missingArgument(let name):
             return "Missing required argument: \(name)"
