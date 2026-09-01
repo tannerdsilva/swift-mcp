@@ -110,7 +110,9 @@ public final class MCPServer: Service, @unchecked Sendable {
     ///   - name: The server name (sent to clients during initialization).
     ///   - version: The server version (e.g. "1.0.0").
     ///   - tools: A ``MCPToolBuilder`` closure that returns tools to register.
-    ///     Pass an empty closure `{}` to register tools later via ``register(_:)``.
+    ///     Each tool instance is registered directly, so configuration passed
+    ///     to a tool's initializer is preserved at invocation time. Pass an
+    ///     empty closure `{}` to register tools later via ``register(_:)``.
     public init(
         name: String,
         version: String,
@@ -122,7 +124,10 @@ public final class MCPServer: Service, @unchecked Sendable {
         self._logger = Logger(label: "mcp.server")
         self.transport = StdioTransport(logger: self._logger)
         for tool in tools() {
-            self.register(tool)
+            // Register the instance itself so any configuration the caller
+            // passed to the tool's initializer survives into invocation —
+            // register(_:) stores only the type and would silently discard it.
+            self.registerInstance(type(of: tool).toolName, instance: tool)
         }
     }
 
@@ -140,7 +145,9 @@ public final class MCPServer: Service, @unchecked Sendable {
     ///     `::` also accepts IPv4 connections. On Darwin this is default; on
     ///     Linux this disables `IPV6_V6ONLY`. Defaults to `false`.
     ///   - tools: A ``MCPToolBuilder`` closure that returns tools to register.
-    ///     Pass an empty closure `{}` to register tools later via ``register(_:)``.
+    ///     Each tool instance is registered directly, so configuration passed
+    ///     to a tool's initializer is preserved at invocation time. Pass an
+    ///     empty closure `{}` to register tools later via ``registerInstance(_:instance:)``.
     public init(
         name: String,
         version: String,
@@ -158,7 +165,10 @@ public final class MCPServer: Service, @unchecked Sendable {
             logger: self._logger
         )
         for tool in tools() {
-            self.register(tool)
+            // Register the instance itself so any configuration the caller
+            // passed to the tool's initializer survives into invocation —
+            // register(_:) stores only the type and would silently discard it.
+            self.registerInstance(type(of: tool).toolName, instance: tool)
         }
     }
 
@@ -224,7 +234,10 @@ public final class MCPServer: Service, @unchecked Sendable {
         self._logger = Logger(label: "mcp.server")
         self.transport = transport
         for tool in tools() {
-            self.register(tool)
+            // Register the instance itself so any configuration the caller
+            // passed to the tool's initializer survives into invocation —
+            // register(_:) stores only the type and would silently discard it.
+            self.registerInstance(type(of: tool).toolName, instance: tool)
         }
     }
 
@@ -427,6 +440,15 @@ public final class MCPServer: Service, @unchecked Sendable {
         let envelope = try? JSONDecoder().decode([String: AnyCodable].self, from: data)
         let hasID = envelope?["id"] != nil
 
+        // Any well-formed object frame carrying a jsonrpc value other than
+        // "2.0" is an Invalid Request. JSONRPCRequest decodes the label as a
+        // plain String, so the version must be validated explicitly here;
+        // missing or non-string jsonrpc is caught by the decode paths below.
+        if let envelope, let version = envelope["jsonrpc"]?.value as? String, version != "2.0" {
+            _logger.warning("Invalid jsonrpc version '\(version)' in: \(String(decoding: data, as: UTF8.self))")
+            return makeErrorResponse(id: envelopeID(from: envelope) ?? .null, code: -32600, message: "Invalid Request")
+        }
+
         if let request = try? JSONDecoder().decode(JSONRPCRequest.self, from: data) {
             requestID = request.id
             methodName = request.method
@@ -469,8 +491,11 @@ public final class MCPServer: Service, @unchecked Sendable {
         case .toolsCall:
             response = try await handleToolsCall(params: params, id: requestID, caller: caller)
         case .initialized, .cancelled:
-            // Notification methods sent as requests carry no reply.
-            response = nil
+            // These methods are defined as notifications, but a client that
+            // sends one with an id has made it a request — JSON-RPC requires
+            // a response to every request, so acknowledge with an empty
+            // success instead of silently hanging the caller.
+            response = makeSuccessResponse(id: requestID, result: [String: AnyCodable]())
         case .resourcesList, .resourcesRead, .promptsList, .promptsGet:
             response = makeErrorResponse(id: requestID, code: -32601, message: "Method not found: \(methodName)")
         }
@@ -626,6 +651,11 @@ public final class MCPServer: Service, @unchecked Sendable {
     }
 
     /// Applies arguments, invokes a tool, and maps the outcome to a response.
+    ///
+    /// Client faults — missing or mistyped arguments — are protocol errors
+    /// (`-32602` Invalid params). Failure inside the tool's own execution,
+    /// however, is reported as a result with `isError: true` per the MCP
+    /// spec's Error Handling section, not as a JSON-RPC error.
     private func invokeTool(
         id: JSONRPCID,
         toolName: String,
@@ -637,15 +667,33 @@ public final class MCPServer: Service, @unchecked Sendable {
             let result = try await invocation()
             return makeSuccessResponse(id: id, result: ToolsCallResult(content: result.content, isError: result.isError))
         } catch let error as MCPError {
-            _logger.warning("Tool \(toolName) failed: \(error.localizedDescription)")
-            return makeErrorResponse(id: id, code: -32603, message: error.localizedDescription)
+            switch error {
+            case .missingArgument, .typeMismatch, .toolNotFound:
+                _logger.warning("Tool \(toolName) rejected arguments: \(error.localizedDescription)")
+                return makeErrorResponse(id: id, code: -32602, message: error.localizedDescription)
+            default:
+                _logger.warning("Tool \(toolName) failed: \(error.localizedDescription)")
+                return makeErrorResponse(id: id, code: -32603, message: error.localizedDescription)
+            }
         } catch {
             _logger.warning("Tool \(toolName) execution error: \(error.localizedDescription)")
-            return makeErrorResponse(id: id, code: -32603, message: "Tool execution error: \(error.localizedDescription)")
+            return makeSuccessResponse(
+                id: id,
+                result: ToolsCallResult(content: [.text(error.localizedDescription)], isError: true)
+            )
         }
     }
 
     // MARK: - Helpers
+
+    /// Extracts the request id from a decoded object envelope so an error
+    /// response can echo a valid string/number id. Returns `nil` when the id
+    /// is absent or is not a legal JSON-RPC id (bool, array, object).
+    private func envelopeID(from envelope: [String: AnyCodable]) -> JSONRPCID? {
+        guard let id = envelope["id"] else { return nil }
+        guard let data = try? JSONEncoder().encode(id) else { return nil }
+        return try? JSONDecoder().decode(JSONRPCID.self, from: data)
+    }
 
     /// Encodes a JSON-RPC success response.
     private func makeSuccessResponse<Result: Encodable & Sendable>(id: JSONRPCID, result: Result) -> Data {

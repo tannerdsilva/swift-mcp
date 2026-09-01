@@ -128,15 +128,26 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
     private let logger: Logger?
     private let inputHandle: FileHandle
     private let outputHandle: FileHandle
+    /// The maximum size of a single newline-delimited JSON-RPC message.
+    ///
+    /// A frame larger than this is rejected and the connection is closed,
+    /// bounding per-connection memory on the stdio transport.
+    public static let defaultMaxMessageSize: Int = 10 * 1024 * 1024
+    private let maxMessageSize: Int
 
     /// Creates a new stdio transport.
     ///
     /// The transport uses `FileHandle.standardInput` for reading and
     /// `FileHandle.standardOutput` for writing.
     ///
-    /// - Parameter logger: An optional logger for transport-level diagnostics.
-    public init(logger: Logger? = nil) {
+    /// - Parameters:
+    ///   - logger: An optional logger for transport-level diagnostics.
+    ///   - maxMessageSize: The maximum size in bytes of a single
+    ///     newline-delimited JSON-RPC message. Defaults to
+    ///     ``defaultMaxMessageSize``.
+    public init(logger: Logger? = nil, maxMessageSize: Int = StdioTransport.defaultMaxMessageSize) {
         self.logger = logger
+        self.maxMessageSize = maxMessageSize
         self.inputHandle = FileHandle.standardInput
         self.outputHandle = FileHandle.standardOutput
     }
@@ -146,8 +157,9 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
     /// Intended for in-process testing: injecting a pipe's read end as input
     /// and a pipe's write end as output lets EOF, shutdown, and message
     /// handling be exercised without a subprocess.
-    init(input: FileHandle, output: FileHandle, logger: Logger? = nil) {
+    init(input: FileHandle, output: FileHandle, logger: Logger? = nil, maxMessageSize: Int = StdioTransport.defaultMaxMessageSize) {
         self.logger = logger
+        self.maxMessageSize = maxMessageSize
         self.inputHandle = input
         self.outputHandle = output
     }
@@ -216,7 +228,7 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
             case .readable:
                 let chunk: Data
                 do {
-                    chunk = try stdin.read(upToCount: chunkSize) ?? Data()
+                    chunk = try readAvailableBytes(fileDescriptor: stdin.fileDescriptor, maxBytes: chunkSize)
                 } catch {
                     logger?.warning("stdio read failed: \(error)")
                     break pollLoop
@@ -241,6 +253,21 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
 
                     let message = Data(lineData)
                     await handlerActor.process(message)
+                }
+
+                // A leftover partial frame larger than the cap is a single
+                // unbounded message. Reject it and end the loop so memory
+                // stays bounded no matter what the peer streams.
+                guard buffer.count <= maxMessageSize else {
+                    logger?.warning("stdio message exceeds maximum size (\(maxMessageSize) bytes); closing connection")
+                    if let errorData = try? JSONEncoder().encode(
+                        JSONRPCErrorResponse(id: .null, code: -32700, message: "Message too large")
+                    ) {
+                        var output = errorData
+                        output.append(0x0A)
+                        try? stdout.write(contentsOf: output)
+                    }
+                    break pollLoop
                 }
 
             case .closed:
@@ -310,4 +337,24 @@ private func pollStdin(timeoutMilliseconds: Int32, fileDescriptor: Int32) -> Std
         return .closed
     }
     return .timeout
+}
+
+/// Reads up to `maxBytes` bytes that are currently available on the fd.
+///
+/// This is a single raw `read(2)`. It must not be replaced with
+/// `FileHandle.read(upToCount:)`: on macOS that method loops until the
+/// requested count is satisfied or EOF, so after a short request the read
+/// blocks waiting for a full buffer — while the client, having sent its
+/// request, waits for the reply with its write end still open. That is a
+/// deadlock. A poll-driven loop calls this only after `POLLIN`, so one read
+/// returns the available chunk immediately. Returns empty data at EOF.
+private func readAvailableBytes(fileDescriptor fd: Int32, maxBytes: Int) throws -> Data {
+    var bytes = [UInt8](repeating: 0, count: maxBytes)
+    let count = bytes.withUnsafeMutableBytes { buffer in
+        read(fd, buffer.baseAddress, buffer.count)
+    }
+    if count < 0 {
+        throw MCPError.transportError("stdio read failed: \(String(cString: strerror(errno)))")
+    }
+    return Data(bytes[0..<count])
 }

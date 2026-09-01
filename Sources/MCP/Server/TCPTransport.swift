@@ -28,17 +28,20 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
     private let handler: @Sendable (Data, MCPCallerInfo) async throws -> Data?
     private let caller: MCPCallerInfo
     private let logger: Logger?
+    private let maxMessageSize: Int
     private var buffer: ByteBuffer?
     private var actor: TransportMessageHandler?
 
     init(
         handler: @escaping @Sendable (Data, MCPCallerInfo) async throws -> Data?,
         caller: MCPCallerInfo,
-        logger: Logger? = nil
+        logger: Logger? = nil,
+        maxMessageSize: Int
     ) {
         self.handler = handler
         self.caller = caller
         self.logger = logger
+        self.maxMessageSize = maxMessageSize
     }
 
     func channelActive(context: ChannelHandlerContext) {
@@ -107,6 +110,24 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
             Task { await actor.process(data) }
         }
 
+        // A leftover partial frame larger than the cap is a single unbounded
+        // message; reject it and close the connection rather than buffering
+        // without bound.
+        if inboundData.readableBytes > maxMessageSize {
+            logger?.warning("TCP message exceeds maximum size (\(maxMessageSize) bytes); closing connection")
+            if let errorData = try? JSONEncoder().encode(
+                JSONRPCErrorResponse(id: .null, code: -32700, message: "Message too large")
+            ) {
+                var out = context.channel.allocator.buffer(capacity: errorData.count + 1)
+                out.writeBytes(errorData)
+                out.writeInteger(UInt8(0x0A))
+                context.channel.writeAndFlush(out, promise: nil)
+            }
+            buffer = nil
+            context.close(promise: nil)
+            return
+        }
+
         // Store remaining bytes for next read
         if inboundData.readableBytes > 0 {
             buffer = inboundData
@@ -139,20 +160,34 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
 /// )
 /// ```
 ///
-/// - Warning: This class uses ``@unchecked Sendable`` because the `channel`
-///   and `isRunning` properties are mutated during startup and shutdown from
-///   different tasks. The NIO `channel` is set once during ``start(handler:)``
-///   and cleared during ``stop()``; these calls do not overlap. The
-///   `accessResolver` closure is `@Sendable` and only read after initialization.
+/// - Warning: This class uses ``@unchecked Sendable`` because `channel`,
+///   `boundAddress`, `isRunning`, and `stopRequested` are mutated from
+///   ``start(handler:)`` and ``stop()`` — which graceful shutdown deliberately
+///   overlaps. All access is serialized through `stateLock`; a ``stop()`` that
+///   lands before the listener is bound records `stopRequested` so the channel
+///   is closed the moment it exists instead of leaving ``start(handler:)``
+///   blocked on the close future. The `accessResolver` closure is `@Sendable`
+///   and only read after initialization.
 public final class TCPTransport: MCPTransport, @unchecked Sendable {
 
     private let address: ServerAddress
     private let eventLoopGroup: EventLoopGroup
     private let allowIPv4MappedIPv6: Bool
     private let logger: Logger?
+    /// Guards `channel`, `boundAddress`, `isRunning`, and `stopRequested`.
+    private let stateLock = NSLock()
     private var channel: Channel?
     private var isRunning = false
+    /// Set by ``stop()`` so a stop that lands before the listener is bound is
+    /// honored once the channel exists.
+    private var stopRequested = false
     private let accessResolver: @Sendable (String) -> AccessLevel
+    /// The maximum size of a single newline-delimited JSON-RPC message.
+    ///
+    /// A frame larger than this is rejected and the connection is closed,
+    /// bounding per-connection memory on the TCP transport.
+    public static let defaultMaxMessageSize: Int = 10 * 1024 * 1024
+    private let maxMessageSize: Int
     /// The address the server channel bound to, once started.
     ///
     /// Useful when binding an ephemeral port (`ServerAddress.hostname("127.0.0.1", port: 0)`);
@@ -202,18 +237,23 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
     ///   - accessResolver: A closure that resolves an IP address to an access
     ///     level. The default is ``defaultAccessResolver(_:)``, which grants
     ///     ``AccessLevel/admin`` to IPv4 and IPv6 loopback callers.
+    ///   - maxMessageSize: The maximum size in bytes of a single
+    ///     newline-delimited JSON-RPC message. Defaults to
+    ///     ``defaultMaxMessageSize``.
     ///   - logger: An optional logger for transport-level diagnostics.
     public init(
         address: ServerAddress,
         eventLoopGroup: EventLoopGroup = MultiThreadedEventLoopGroup.singleton,
         allowIPv4MappedIPv6: Bool = false,
         accessResolver: @escaping @Sendable (String) -> AccessLevel = TCPTransport.defaultAccessResolver,
+        maxMessageSize: Int = TCPTransport.defaultMaxMessageSize,
         logger: Logger? = nil
     ) {
         self.address = address
         self.eventLoopGroup = eventLoopGroup
         self.allowIPv4MappedIPv6 = allowIPv4MappedIPv6
         self.accessResolver = accessResolver
+        self.maxMessageSize = maxMessageSize
         self.logger = logger
     }
 
@@ -223,17 +263,19 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
     ///   The handler receives raw JSON-RPC data and caller information, and
     ///   returns optional response data.
     public func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
-        isRunning = true
+        stateLock.withLock {
+            isRunning = true
+        }
 
         let bootstrap = ServerBootstrap(group: eventLoopGroup)
             .serverChannelOption(ChannelOptions.backlog, value: 256)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { [accessResolver, handler, logger] channel in
+            .childChannelInitializer { [accessResolver, handler, logger, maxMessageSize] channel in
                 let remoteAddress = channel.remoteAddress?.description ?? "unknown"
                 let accessLevel = accessResolver(remoteAddress)
                 let caller = MCPCallerInfo(sourceAddress: remoteAddress, accessLevel: accessLevel)
                 return channel.pipeline.addHandler(
-                    MCPMessageHandler(handler: handler, caller: caller, logger: logger)
+                    MCPMessageHandler(handler: handler, caller: caller, logger: logger, maxMessageSize: maxMessageSize)
                 )
             }
             .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
@@ -271,19 +313,43 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
             ).get()
         }
 
-        self.channel = channel
-        self.boundAddress = channel.localAddress
+        // Publish the bound listener under the lock. If stop() raced ahead and
+        // observed no channel yet (the pre-bind window), it recorded
+        // stopRequested — close the fresh listener here so start() returns
+        // instead of blocking on the close future forever.
+        let stopWhileBinding: Bool = stateLock.withLock {
+            self.channel = channel
+            self.boundAddress = channel.localAddress
+            return stopRequested
+        }
 
-        // Wait for the channel to close (server shutdown)
-        try await channel.closeFuture.get()
+        if stopWhileBinding {
+            logger?.info("stop() arrived during bind; closing listener immediately")
+            try await channel.close(mode: .all)
+        } else {
+            // Wait for the channel to close (server shutdown)
+            try await channel.closeFuture.get()
+        }
+
+        stateLock.withLock {
+            self.channel = nil
+            self.boundAddress = nil
+        }
     }
 
     /// Stops the transport and closes the listening channel.
+    ///
+    /// If the listener has not been bound yet, the stop is recorded and applied
+    /// the moment the channel appears, so ``start(handler:)`` never deadlocks
+    /// on a stop that arrived during startup.
     public func stop() async throws {
-        isRunning = false
-        try await channel?.close(mode: .all)
-        channel = nil
-        boundAddress = nil
+        let activeChannel: Channel? = stateLock.withLock {
+            stopRequested = true
+            isRunning = false
+            return channel
+        }
+
+        try await activeChannel?.close(mode: .all)
     }
 }
 

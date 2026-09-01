@@ -525,11 +525,11 @@ func mcpApplicationToolID() {
             func callTool(_ id: MyApp_ToolID, arguments: [String: Any]) async throws -> MCPToolResult {
                 switch id {
                 case .greet:
-                        var tool = Greet()
+                        var tool = self.greet
                         try tool.apply(arguments: arguments)
                         return try await tool.invoke(context: MCPContext(arguments: arguments))
                 case .calculate:
-                        var tool = Calculate()
+                        var tool = self.calculate
                         try tool.apply(arguments: arguments)
                         return try await tool.invoke(context: MCPContext(arguments: arguments))
                 }
@@ -578,12 +578,12 @@ func mcpApplicationDebugTool() {
             func callTool(_ id: MyApp_ToolID, arguments: [String: Any]) async throws -> MCPToolResult {
                 switch id {
                 case .greet:
-                        var tool = Greet()
+                        var tool = self.greet
                         try tool.apply(arguments: arguments)
                         return try await tool.invoke(context: MCPContext(arguments: arguments))
                 #if DEBUG
                         case .debug:
-                        var tool = DebugTool()
+                        var tool = self.debug
                         try tool.apply(arguments: arguments)
                         return try await tool.invoke(context: MCPContext(arguments: arguments))
                         #endif
@@ -595,7 +595,9 @@ func mcpApplicationDebugTool() {
                 let app = MyApp()
                 let server = MCPServer(name: "test", version: "1.0.0") {
                         app.greet
+                        #if DEBUG
                         app.debug
+                        #endif
                     }
                 try await server.runService()
             }
@@ -628,7 +630,7 @@ func mcpApplicationWithAddress() {
             func callTool(_ id: MyApp_ToolID, arguments: [String: Any]) async throws -> MCPToolResult {
                 switch id {
                 case .greet:
-                        var tool = Greet()
+                        var tool = self.greet
                         try tool.apply(arguments: arguments)
                         return try await tool.invoke(context: MCPContext(arguments: arguments))
                 }
@@ -671,7 +673,7 @@ func mcpApplicationWithTransport() {
             func callTool(_ id: MyApp_ToolID, arguments: [String: Any]) async throws -> MCPToolResult {
                 switch id {
                 case .greet:
-                        var tool = Greet()
+                        var tool = self.greet
                         try tool.apply(arguments: arguments)
                         return try await tool.invoke(context: MCPContext(arguments: arguments))
                 }

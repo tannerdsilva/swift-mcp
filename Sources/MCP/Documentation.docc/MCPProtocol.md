@@ -169,21 +169,30 @@ Invoke a tool with arguments.
 
 ### notifications/initialized
 
-Sent by the client after initialization. Acknowledged (no response).
+Sent by the client after initialization. Acknowledged (no response) when sent as a
+notification. A client that sends it with an `id` gets an empty success response —
+JSON-RPC requires a response to every request, so the server never hangs a caller.
 
 ### notifications/cancelled
 
-Sent by the client to cancel a pending request. Acknowledged (no response).
+Sent by the client to cancel a pending request. Handled like
+`notifications/initialized`: no response for the notification form, and an empty
+success response when a client sends it as a request with an `id`.
 
 ## Error Codes
 
 | Code | Meaning |
 |---|---|
-| -32700 | Parse error (a frame that is not valid JSON-RPC) |
+| -32700 | Parse error (a frame that is not valid JSON) |
+| -32600 | Invalid Request (malformed frame, wrong `jsonrpc` version, invalid id value) |
 | -32000 | Access denied (`tools/call` for a tool above the caller's level) |
 | -32601 | Method not found |
-| -32602 | Invalid params (missing tool name, unknown tool) |
-| -32603 | Internal error (tool execution failure, argument type mismatch) |
+| -32602 | Invalid params (missing tool name, unknown tool, missing or mistyped arguments) |
+| -32603 | Internal error (server-side fault) |
+
+A tool that fails while *executing* is not a JSON-RPC error: per the spec's Error
+Handling section, the server returns a result with `isError: true` carrying the
+error message as text content.
 
 ## Content Blocks
 

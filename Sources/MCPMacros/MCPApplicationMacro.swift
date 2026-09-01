@@ -7,7 +7,6 @@ import SwiftDiagnostics
 /// Information about a `@Tool` property extracted from the struct declaration.
 struct ToolPropertyInfo {
     let name: String
-    let typeName: String
     let isDebugOnly: Bool
 }
 
@@ -117,40 +116,17 @@ public struct MCPApplicationMacro: MemberMacro {
             for binding in varDecl.bindings {
                 guard let name = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text else { continue }
 
-                // Extract the type name from type annotation or initializer
-                let typeName: String
-                if let type = binding.typeAnnotation?.type {
-                    typeName = trimmed(type.description)
-                } else if let initExpr = binding.initializer?.value {
-                    // Try to extract type from initializer expression (e.g., "Greet()" -> "Greet")
-                    typeName = extractTypeFromInitializer(initExpr)
-                } else {
-                    typeName = "Never"
-                }
-
                 // Check for available: .debug parameter
                 let isDebugOnly = extractDebugAvailability(from: attr)
 
                 properties.append(ToolPropertyInfo(
                     name: name,
-                    typeName: typeName,
                     isDebugOnly: isDebugOnly
                 ))
             }
         }
 
         return properties
-    }
-
-    /// Extracts the type name from an initializer expression.
-    /// e.g., "Greet()" -> "Greet", "MyModule.Greet()" -> "MyModule.Greet"
-    static func extractTypeFromInitializer(_ expr: ExprSyntax) -> String {
-        let desc = trimmed(expr.description)
-        // Remove trailing parentheses and arguments
-        if let parenIndex = desc.firstIndex(of: "(") {
-            return String(desc[..<parenIndex])
-        }
-        return desc
     }
 
     /// Checks if the @Tool attribute has `available: .debug`.
@@ -199,7 +175,7 @@ public struct MCPApplicationMacro: MemberMacro {
             let close = prop.isDebugOnly ? "\n        #endif" : ""
             return """
             \(open)case .\(prop.name):
-                    var tool = \(prop.typeName)()
+                    var tool = self.\(prop.name)
                     try tool.apply(arguments: arguments)
                     return try await tool.invoke(context: MCPContext(arguments: arguments))\(close)
             """
@@ -227,8 +203,17 @@ public struct MCPApplicationMacro: MemberMacro {
         transportArg: String?,
         toolProperties: [ToolPropertyInfo]
     ) -> String {
-        // Build the server initialization with the requested transport
-        let toolList = toolProperties.map { "            app.\($0.name)" }.joined(separator: "\n")
+        // Build the server initialization with the requested transport.
+        // Debug-only tools are guarded so their registration is compiled out of
+        // release builds — the registry, tools/list, and tools/call all feed
+        // from this registration list, so an unguarded entry would expose
+        // debug tools in production.
+        let toolList = toolProperties.map { prop in
+            if prop.isDebugOnly {
+                return "            #if DEBUG\n            app.\(prop.name)\n            #endif"
+            }
+            return "            app.\(prop.name)"
+        }.joined(separator: "\n")
         let serverInit: String
         if let transport = transportArg {
             serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", transport: \(transport)) {\n\(toolList)\n        }"

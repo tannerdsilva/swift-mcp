@@ -153,6 +153,43 @@ struct AppServer {
     @Tool var calculate = Calculator()
 }
 
+// A tool whose distinguishing state lives in the instance, not the type —
+// used to prove the builder path (and the generated dispatch) preserve
+// constructor configuration instead of silently reconstructing via init().
+struct PrefixedEchoTool: MCPTool {
+    static let configuration = MCPToolConfiguration(
+        description: "Echoes a message with a configured prefix",
+        name: "prefixedEcho"
+    )
+    let prefix: String
+    init() { self.prefix = "default" }
+    init(prefix: String) { self.prefix = prefix }
+    func invoke(context: MCPContext) async throws -> MCPToolResult {
+        .text("\(prefix):\(context.arguments["message"] as? String ?? "")")
+    }
+}
+
+@MCPApplication(name: "configured-app", version: "1.0.0")
+struct ConfiguredApp {
+    @Tool var prefixed = PrefixedEchoTool(prefix: "from-config")
+}
+
+// A tool that fails at execution time with an arbitrary thrown error.
+private enum RuntimeBoom: Error, LocalizedError {
+    case detonated
+    var errorDescription: String? { "the tool detonated" }
+}
+
+struct ExplosiveTool: MCPTool {
+    static let configuration = MCPToolConfiguration(
+        description: "Always fails while executing",
+        name: "explode"
+    )
+    func invoke(context: MCPContext) async throws -> MCPToolResult {
+        throw RuntimeBoom.detonated
+    }
+}
+
 @Test("MCPCommand with zero parameters advertises none")
 func emptyCommandDefaults() async throws {
     #expect(EmptyCommand.discoverParameters().isEmpty)
@@ -1250,6 +1287,119 @@ func serverBuilderRegistration() async throws {
     #expect(tools?.count == 2)
 }
 
+@Test("Builder-registered tools keep constructor configuration")
+func serverBuilderPreservesToolConfiguration() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "prefixedEcho", "arguments": ["message": "hi"]]
+        ])
+    ]
+
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport) {
+        PrefixedEchoTool(prefix: "prod")
+    }
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let result = response?["result"] as? [String: Any]
+    let content = result?["content"] as? [[String: Any]]
+    // The configured prefix survives — a type-only register would answer "default".
+    #expect(content?.first?["text"] as? String == "prod:hi")
+}
+
+@Test("MCPApplication callTool uses the configured tool instance")
+func mcpApplicationCallToolPreservesConfiguration() async throws {
+    let app = ConfiguredApp()
+    let result = try await app.callTool(.prefixed, arguments: ["message": "hi"])
+    #expect(result.isError == false)
+    if case .text(let text) = result.content[0] {
+        #expect(text == "from-config:hi")
+    } else {
+        Issue.record("Expected text content")
+    }
+}
+
+@Test("Server rejects a wrong jsonrpc version with -32600")
+func serverRejectsWrongJsonrpcVersion() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "1.0", "id": 10, "method": "tools/list"])
+    ]
+
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport) { Greet() }
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    // A valid id is echoed even when the version label is rejected.
+    #expect(response?["id"] as? Int == 10)
+    let error = response?["error"] as? [String: Any]
+    #expect(error?["code"] as? Int == -32600)
+}
+
+@Test("Server responds to a notification method sent with an id")
+func serverRespondsToNotificationWithID() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 7, "method": "notifications/initialized"])
+    ]
+
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport) { Greet() }
+    try await server.runService()
+
+    // JSON-RPC requires a response to every request — a notification method
+    // carrying an id is acknowledged instead of hanging the caller.
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    #expect(response?["id"] as? Int == 7)
+    #expect(response?["result"] != nil)
+}
+
+@Test("Server maps a missing required argument to -32602")
+func serverMissingArgumentInvalidParams() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": ["name": "greet", "arguments": [:]]
+        ])
+    ]
+
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport) { Greet() }
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let error = response?["error"] as? [String: Any]
+    #expect(error?["code"] as? Int == -32602)
+}
+
+@Test("Server reports tool execution errors as isError results, not JSON-RPC errors")
+func serverToolExecutionErrorIsErrorResult() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": ["name": "explode", "arguments": [:]]
+        ])
+    ]
+
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport) { ExplosiveTool() }
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    // No JSON-RPC error frame — execution failures are results, per the spec.
+    #expect(response?["error"] == nil)
+    let result = response?["result"] as? [String: Any]
+    #expect(result?["isError"] as? Bool == true)
+    let content = result?["content"] as? [[String: Any]]
+    #expect(content?.first?["text"] as? String == "the tool detonated")
+}
+
 // MARK: - TransportMessageHandler Tests
 
 @Test("TransportMessageHandler processes messages in order")
@@ -1505,7 +1655,8 @@ func serverNullArgumentIsTypeMismatch() async throws {
     #expect(transport.sentMessages.count == 1)
     let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
     let error = response?["error"] as? [String: Any]
-    #expect(error?["code"] as? Int == -32603)
+    // A mistyped argument is a client fault — invalid params, per spec.
+    #expect(error?["code"] as? Int == -32602)
 }
 
 // MARK: - F3/F4/F5 Compiled Integration Fixtures
@@ -1692,6 +1843,24 @@ final class StdioPair {
     }
 }
 
+/// Waits up to `timeout` for data on a pipe fd and returns the available
+/// bytes. Uses a raw poll + read so a short response is returned immediately
+/// (mirrors the transport's own read path; `read(upToCount:)` would block
+/// waiting for a full buffer).
+private func readPipeWithTimeout(fd: Int32, timeout: TimeInterval) -> Data {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        var pollFds = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        let result = poll(&pollFds, 1, 50)
+        if result > 0, pollFds.revents & Int16(POLLIN) != 0 {
+            var bytes = [UInt8](repeating: 0, count: 4096)
+            let count = bytes.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+            if count > 0 { return Data(bytes[0..<count]) }
+        }
+    }
+    return Data()
+}
+
 /// A minimal blocking TCP client used to drive the TCP transport end-to-end.
 private enum RawSocketClient {
     static func request(_ payload: String, port: Int) throws -> String {
@@ -1770,6 +1939,52 @@ func stdioTransportStopsCleanly() async throws {
     _ = try? pair.outputRead.readToEnd()
 }
 
+@Test("Stdio transport responds while stdin remains open")
+func stdioRespondsWhileStdinOpen() async throws {
+    let input = Pipe()
+    let output = Pipe()
+    let transport = StdioTransport(input: input.fileHandleForReading, output: output.fileHandleForWriting)
+    let server = MCPServer(name: "stdio-open", version: "1.0.0", transport: transport) { Greet() }
+    let task = Task { try await server.runService() }
+
+    // Send a complete request but keep the write end OPEN — a real client
+    // sends its request and waits for the reply without closing stdin. The
+    // read loop must answer on the first poll, not wait to fill its buffer.
+    try input.fileHandleForWriting.write(contentsOf: Data("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n".utf8))
+
+    let responseData = readPipeWithTimeout(fd: output.fileHandleForReading.fileDescriptor, timeout: 5)
+    let text = String(decoding: responseData, as: UTF8.self)
+    #expect(text.contains("\"id\":1"))
+    #expect(text.contains("\"result\""))
+
+    try await server.stop()
+    _ = await task.result
+}
+
+@Test("Stdio transport rejects an oversized frame and stops")
+func stdioOversizedFrameRejected() async throws {
+    let input = Pipe()
+    let output = Pipe()
+    let transport = StdioTransport(
+        input: input.fileHandleForReading,
+        output: output.fileHandleForWriting,
+        maxMessageSize: 1024
+    )
+    let task = Task { try await transport.start { _, _ in nil as Data? } }
+
+    // One unbounded frame (no newline) far past the cap.
+    try input.fileHandleForWriting.write(contentsOf: Data(repeating: 0x61, count: 8192))
+    try input.fileHandleForWriting.close()
+
+    // The transport writes the error frame and stops instead of buffering forever.
+    try await task.value
+
+    try output.fileHandleForWriting.close()
+    let outputData = try output.fileHandleForReading.readToEnd() ?? Data()
+    let text = String(decoding: outputData, as: UTF8.self)
+    #expect(text.contains("Message too large"))
+}
+
 @Test("TCP transport serves requests over a real socket and stops cleanly")
 func tcpTransportEndToEnd() async throws {
     let transport = TCPTransport(address: .hostname("127.0.0.1", port: 0))
@@ -1804,6 +2019,47 @@ func tcpTransportEndToEnd() async throws {
         port: port
     )
     #expect(call.contains("\"Hello, TCP!\""))
+
+    try await server.stop()
+    let result = await serverTask.result
+    #expect(throws: Never.self) { try result.get() }
+}
+
+@Test("TCP stop before bind does not hang start")
+func tcpStopBeforeStartDoesNotHang() async throws {
+    let transport = TCPTransport(address: .hostname("127.0.0.1", port: 0))
+    // Stop while nothing is bound — the pre-bind window that used to leave
+    // start() blocked on the close future forever.
+    try await transport.stop()
+
+    // start() must bind, observe the recorded stop, close, and return.
+    try await transport.start { _, _ in nil as Data? }
+}
+
+@Test("TCP transport rejects an oversized frame and closes the connection")
+func tcpOversizedFrameRejected() async throws {
+    let transport = TCPTransport(address: .hostname("127.0.0.1", port: 0), maxMessageSize: 1024)
+    let server = MCPServer(name: "tcp-cap", version: "1.0.0", transport: transport) { Greet() }
+    let serverTask = Task { try await server.runService() }
+
+    var port: Int?
+    for _ in 0..<50 {
+        if let bound = transport.boundPort {
+            port = bound
+            break
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    guard let port else {
+        Issue.record("TCP server never reported a bound port")
+        try? await server.stop()
+        _ = await serverTask.result
+        return
+    }
+
+    let oversized = String(repeating: "a", count: 8192)
+    let response = try RawSocketClient.request(oversized + "\n", port: port)
+    #expect(response.contains("Message too large"))
 
     try await server.stop()
     let result = await serverTask.result
