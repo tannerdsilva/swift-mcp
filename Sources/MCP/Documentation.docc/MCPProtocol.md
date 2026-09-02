@@ -194,6 +194,16 @@ A tool that fails while *executing* is not a JSON-RPC error: per the spec's Erro
 Handling section, the server returns a result with `isError: true` carrying the
 error message as text content.
 
+## Batches and Null IDs
+
+- A top-level JSON array is a JSON-RPC batch: each element is routed like a
+  single message and the non-nil responses are returned as one array in request
+  order. An empty batch is an Invalid Request (`-32600`); a batch whose elements
+  are all notifications gets no response.
+- A request with `"id": null` is answered with `"id": null`. JSON-RPC 2.0
+  discourages (but permits) null ids — an id must be a String, Number, or NULL —
+  and every request must be answered, so the server never hangs such a caller.
+
 ## Content Blocks
 
 `tools/call` results carry an array of content blocks. Text and image blocks

@@ -157,9 +157,12 @@ let group = ServiceGroup(configuration: .init(services: [server]))
 try await group.run()
 ```
 
-### AsyncMCPTool Protocol Added
+### AsyncMCPTool Removed
 
-A new ``AsyncMCPTool`` marker protocol is available for tools that perform async work. This is optional — the ``MCPCommand`` macro detects async automatically.
+The ``AsyncMCPTool`` marker protocol (introduced in an earlier release) has
+been removed — it carried no requirements and had no framework consumer, and
+``MCPCommand`` detects `async` from `run()`. Tools that previously conformed
+to it should conform to ``MCPTool`` directly.
 
 ## Related Articles
 

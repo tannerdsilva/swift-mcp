@@ -175,7 +175,10 @@ public struct MCPCommandMacro: ExtensionMacro {
                 if let type = binding.typeAnnotation?.type {
                     typeAnnotation = trimmed(type.description)
                 } else {
-                    typeAnnotation = "String"
+                    // No explicit annotation — infer the schema type from the
+                    // initializer so `@Argument var count = 42` advertises an
+                    // integer instead of defaulting to String.
+                    typeAnnotation = inferType(fromInitializer: binding.initializer?.value)
                 }
 
                 let hasInitializer = binding.initializer != nil
@@ -202,6 +205,26 @@ public struct MCPCommandMacro: ExtensionMacro {
         }
 
         return properties
+    }
+
+    /// Infers a schema type name from a wrapper property's initializer when no
+    /// type annotation is present.
+    ///
+    /// Literals map to their JSON-native Swift types (`42` → `Int`,
+    /// `0.5` → `Double`, `true` → `Bool`, `"x"` → `String`); a call
+    /// expression contributes its callee type name (`Foo()` → `Foo`).
+    /// Anything unclassifiable falls back to `String` — the historical default.
+    static func inferType(fromInitializer expr: ExprSyntax?) -> String {
+        guard let expr else { return "String" }
+        if expr.is(IntegerLiteralExprSyntax.self) { return "Int" }
+        if expr.is(FloatLiteralExprSyntax.self) { return "Double" }
+        if expr.is(BooleanLiteralExprSyntax.self) { return "Bool" }
+        if expr.is(StringLiteralExprSyntax.self) { return "String" }
+        if let call = expr.as(FunctionCallExprSyntax.self),
+           let callee = call.calledExpression.as(DeclReferenceExprSyntax.self) {
+            return callee.baseName.text
+        }
+        return "String"
     }
 
     // MARK: - Extension Generation

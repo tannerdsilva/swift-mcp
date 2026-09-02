@@ -136,12 +136,23 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        print("Channel error: \(error)")
+        logger?.warning("Channel error: \(error)")
         context.close(promise: nil)
     }
 }
 
 // MARK: - TCP Transport
+
+/// Implemented by transports that can report the address they bound to.
+///
+/// Lets the server expose ephemeral-bind discovery without knowing concrete
+/// transport types.
+protocol MCPTransportAddressProviding {
+    /// The bound address, or `nil` before the transport has started.
+    var boundAddress: SocketAddress? { get }
+    /// The bound port (for ephemeral binds), or `nil` before startup.
+    var boundPort: Int? { get }
+}
 
 /// A transport that listens for TCP connections and communicates using
 /// newline-delimited JSON messages.
@@ -169,7 +180,7 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
 ///   is closed the moment it exists instead of leaving ``start(handler:)``
 ///   blocked on the close future. The `accessResolver` closure is `@Sendable`
 ///   and only read after initialization.
-public final class TCPTransport: MCPTransport, @unchecked Sendable {
+public final class TCPTransport: MCPTransport, MCPTransportAddressProviding, @unchecked Sendable {
 
     private let address: ServerAddress
     private let eventLoopGroup: EventLoopGroup
@@ -193,13 +204,13 @@ public final class TCPTransport: MCPTransport, @unchecked Sendable {
     ///
     /// Useful when binding an ephemeral port (`ServerAddress.hostname("127.0.0.1", port: 0)`);
     /// readable while the transport is running.
-    internal private(set) var boundAddress: SocketAddress?
+    public private(set) var boundAddress: SocketAddress?
 
     /// The port the server channel bound to, or `nil` until started.
     ///
     /// Convenience for ephemeral-port binds, so callers do not need to touch
     /// the NIO `SocketAddress` type directly.
-    internal var boundPort: Int? { boundAddress?.port }
+    public var boundPort: Int? { boundAddress?.port }
 
     /// Resolves loopback addresses to ``AccessLevel/admin``.
     ///

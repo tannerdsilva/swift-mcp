@@ -31,6 +31,26 @@ import SwiftDiagnostics
 /// The generated struct is named `{FunctionName}Tool` (e.g., `greetTool`),
 /// conforms to ``MCPTool``, and can be registered with an ``MCPServer``.
 ///
+/// ## Parameter descriptions
+///
+/// Parameter descriptions are read from the function's `///` doc comment and
+/// surfaced in the tool's JSON Schema, which LLM clients rely on to format
+/// arguments. Both spellings are supported:
+///
+/// ```swift
+/// /// Greets a person.
+/// /// - Parameter name: The person to greet.
+/// /// - Parameter count: How many times to repeat.
+/// ```
+///
+/// or a `- Parameters:` section:
+///
+/// ```swift
+/// /// - Parameters:
+/// ///   - name: The person to greet.
+/// ///   - count: How many times to repeat.
+/// ```
+///
 /// ## Scope constraint
 ///
 /// ``FuncTool`` is a *peer* macro that introduces a new type at its attachment
@@ -119,9 +139,14 @@ public struct ToolMacro: PeerMacro {
         let hasDefault: Bool
         let isBool: Bool
         let defaultExpr: String?
+        /// Human-readable description from the function's `///` doc comment
+        /// (`- Parameter name: text`), surfaced in the tool's JSON Schema.
+        let description: String?
     }
 
     static func extractParameters(from funcDecl: FunctionDeclSyntax) throws -> [ParamInfo] {
+        let descriptions = parameterDescriptions(from: funcDecl)
+
         var params: [ParamInfo] = []
 
         for param in funcDecl.signature.parameterClause.parameters {
@@ -155,11 +180,76 @@ public struct ToolMacro: PeerMacro {
                 type: typeText,
                 hasDefault: hasDefault,
                 isBool: isBool,
-                defaultExpr: defaultExpr
+                defaultExpr: defaultExpr,
+                description: descriptions[paramName]
             ))
         }
 
         return params
+    }
+
+    /// Parses parameter descriptions out of the function's `///` doc comment.
+    ///
+    /// Supports both spellings used by Swift documentation conventions:
+    /// `- Parameter name: text` and a `- Parameters:` section with one
+    /// `- name: text` line per parameter. Parameters the callers did not
+    /// document get no description.
+    static func parameterDescriptions(from funcDecl: FunctionDeclSyntax) -> [String: String] {
+        var result: [String: String] = [:]
+        var inParametersSection = false
+
+        for piece in funcDecl.leadingTrivia {
+            guard case .docLineComment(let line) = piece else { continue }
+            let content = trimmed(String(line.dropFirst(3)))
+            guard !content.isEmpty else { continue }
+
+            if content == "- Parameters:" {
+                inParametersSection = true
+                continue
+            }
+
+            // "- Parameter <name>: <desc>"
+            if content.hasPrefix("- Parameter ") {
+                if let (name, text) = splitParameterLine(String(content.dropFirst("- Parameter ".count))) {
+                    result[name] = text
+                }
+                continue
+            }
+
+            // Inside a "- Parameters:" section: "- <name>: <desc>"
+            if inParametersSection, content.hasPrefix("- ") {
+                if let (name, text) = splitParameterLine(String(content.dropFirst(2))) {
+                    result[name] = text
+                }
+                continue
+            }
+        }
+
+        return result
+    }
+
+    /// Splits `name: description` (the portion after the `- ...` prefix).
+    private static func splitParameterLine(_ rest: String) -> (name: String, text: String)? {
+        guard let colonIdx = rest.firstIndex(of: ":") else { return nil }
+        let name = trimmed(String(rest[..<colonIdx]))
+        let text = trimmed(String(rest[rest.index(after: colonIdx)...]))
+        guard !name.isEmpty else { return nil }
+        return (name, text)
+    }
+
+    /// Escapes prose for embedding in a generated string literal (no
+    /// Foundation — a hand-rolled pass over the characters).
+    static func escapedStringLiteral(_ value: String) -> String {
+        var result = ""
+        for character in value {
+            switch character {
+            case "\\": result += "\\\\"
+            case "\"": result += "\\\""
+            case "\n": result += "\\n"
+            default: result.append(character)
+            }
+        }
+        return result
     }
 
     // MARK: - Struct Generation
@@ -197,7 +287,16 @@ public struct ToolMacro: PeerMacro {
                 defaultValue = " = \(param.defaultExpr ?? defaultValueForType(param.type))"
             }
 
-            properties.append("    \(wrapperKind) var \(param.name): \(param.type)\(defaultValue)")
+            // Surface a documented parameter description in the wrapper so it
+            // reaches the generated JSON Schema.
+            let wrapper: String
+            if let paramDescription = param.description, !paramDescription.isEmpty {
+                wrapper = "\(wrapperKind)(description: \"\(escapedStringLiteral(paramDescription))\")"
+            } else {
+                wrapper = wrapperKind
+            }
+
+            properties.append("    \(wrapper) var \(param.name): \(param.type)\(defaultValue)")
             callArgs.append("\(param.name): \(param.name)")
         }
 
@@ -209,7 +308,7 @@ public struct ToolMacro: PeerMacro {
                 name: param.name,
                 type: param.type,
                 wrapperKind: kind,
-                description: nil,
+                description: param.description,
                 hasInitializer: param.hasDefault,
                 enumValues: nil,
                 initializerExpr: nil

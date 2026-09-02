@@ -11,6 +11,7 @@
 
 import Foundation
 import Logging
+import NIOCore
 import ServiceLifecycle
 import Synchronization
 import UnixSignals
@@ -108,6 +109,23 @@ public final class MCPServer: Service, @unchecked Sendable {
     public var logLevel: Logger.Level {
         get { _logger.logLevel }
         set { _logger.logLevel = newValue }
+    }
+
+    /// The address the transport bound to, if it can report one.
+    ///
+    /// `nil` for stdio, for transports that do not expose a bound address, or
+    /// before a TCP transport has started. Pairs with ``boundPort`` for
+    /// ephemeral binds (`ServerAddress.hostname("127.0.0.1", port: 0)`).
+    public var boundAddress: SocketAddress? {
+        (transport as? MCPTransportAddressProviding)?.boundAddress
+    }
+
+    /// The port the transport bound to, if it can report one.
+    ///
+    /// Makes an ephemeral port bind discoverable end-to-end without reaching
+    /// into the transport. `nil` for stdio or before startup.
+    public var boundPort: Int? {
+        (transport as? MCPTransportAddressProviding)?.boundPort
     }
 
     /// Creates a new MCP server over the standard stdio transport.
@@ -468,6 +486,36 @@ public final class MCPServer: Service, @unchecked Sendable {
     ///   - caller: Information about the caller.
     /// - Returns: Response data, or `nil` for notifications.
     private func handleMessage(_ data: Data, caller: MCPCallerInfo) async throws -> Data? {
+        // JSON-RPC batch: a top-level array of requests. Each element is
+        // routed like a single message and the non-nil responses are returned
+        // as one JSON array in request order. An empty batch is an Invalid
+        // Request; a batch whose elements are all notifications gets no
+        // response, matching the single-message rules.
+        if firstNonWhitespaceByte(of: data) == 0x5B {  // '['
+            guard let elements = try? JSONDecoder().decode([AnyCodable].self, from: data), !elements.isEmpty else {
+                _logger.warning("Invalid JSON-RPC batch in: \(String(decoding: data, as: UTF8.self))")
+                return makeErrorResponse(id: .null, code: -32600, message: "Invalid Request")
+            }
+
+            var responses: [Data] = []
+            for element in elements {
+                guard let elementData = try? JSONEncoder().encode(element) else { continue }
+                if let response = try await handleMessage(elementData, caller: caller) {
+                    responses.append(response)
+                }
+            }
+
+            guard !responses.isEmpty else { return nil }
+
+            var batch = Data("[".utf8)
+            for (index, object) in responses.enumerated() {
+                if index > 0 { batch.append(0x2C) }  // ','
+                batch.append(object)
+            }
+            batch.append(0x5D)  // ']'
+            return batch
+        }
+
         let requestID: JSONRPCID
         let methodName: String
         let params: [String: AnyCodable]?
@@ -476,6 +524,11 @@ public final class MCPServer: Service, @unchecked Sendable {
         // notifications (which must not). An invalid id value — a bool, array,
         // or object — still marks the frame as a request, so it gets a
         // -32600 Invalid Request error with a null id instead of a silent drop.
+        //
+        // A frame with `"id": null` is likewise a request, not a notification:
+        // JSON-RPC 2.0 requires ids to be a String, Number, or NULL and answers
+        // every request. Null ids are discouraged (they collide with the
+        // unknown-id error convention) but permitted, so we echo `id: null`.
         let envelope = try? JSONDecoder().decode([String: AnyCodable].self, from: data)
         let hasID = envelope?["id"] != nil
 
@@ -780,6 +833,18 @@ public final class MCPServer: Service, @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    /// The first byte of `data`, skipping ASCII whitespace, or `nil` if the
+    /// payload is empty or only whitespace. Used to classify the top-level
+    /// JSON shape (object vs array) without a full decode.
+    private func firstNonWhitespaceByte(of data: Data) -> UInt8? {
+        for byte in data {
+            if byte != 0x20, byte != 0x09, byte != 0x0A, byte != 0x0D {
+                return byte
+            }
+        }
+        return nil
+    }
 
     /// Extracts the request id from a decoded object envelope so an error
     /// response can echo a valid string/number id. Returns `nil` when the id

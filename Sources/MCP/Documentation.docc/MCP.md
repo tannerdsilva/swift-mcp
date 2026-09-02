@@ -46,9 +46,9 @@ swift-mcp is a Swift framework for building MCP servers. It provides:
 ### Core Protocols
 
 - ``MCPTool``
-- ``AsyncMCPTool``
 - ``MCPTransport``
 - ``MCPToolID``
+- ``MCPToolDispatcher``
 
 ### Server
 

@@ -2,7 +2,7 @@
 
 **A Swift framework for building MCP (Model Context Protocol) servers with a declarative, property-wrapper-based API.**
 
-![Swift](https://img.shields.io/badge/Swift-6.0-orange.svg) ![License](https://img.shields.io/badge/License-MIT-green.svg) ![MCP](https://img.shields.io/badge/MCP-2025--06--18-purple.svg)
+![Swift](https://img.shields.io/badge/Swift-6.0-orange.svg) ![License](https://img.shields.io/badge/License-MIT-green.svg) ![MCP](https://img.shields.io/badge/MCP-2025--11--25-purple.svg)
 
 ---
 
@@ -66,7 +66,7 @@ Add the package to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/your-org/swift-mcp.git", from: "1.0.0")
+    .package(url: "https://github.com/tannerdsilva/swift-mcp.git", from: "1.0.0")
 ],
 targets: [
     .target(

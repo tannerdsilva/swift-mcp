@@ -457,7 +457,7 @@ FROM ubuntu:24.04 AS runtime
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=build /app/.build/release/MCPDemo /app/server
+COPY --from=build /app/.build/release/MyServer /app/server  # replace with your executable target
 
 EXPOSE 8080
 

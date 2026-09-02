@@ -70,7 +70,7 @@ struct Calculator: MCPTool {
 
 // MARK: - Async Test Tool
 
-struct AsyncGreet: AsyncMCPTool {
+struct AsyncGreet: MCPTool {
     static let configuration = MCPToolConfiguration(
         description: "Async greeting tool",
         name: "asyncGreet"
@@ -437,7 +437,7 @@ func calculatorDivideByZero() async throws {
 
 // MARK: - Async Tool Invocation Tests
 
-@Test("AsyncMCPTool invoke dispatches to async run()")
+@Test("Async run() is detected and invoked")
 func asyncToolInvocation() async throws {
     var tool = AsyncGreet()
     try tool.apply(arguments: ["name": "Async World"])
@@ -449,7 +449,7 @@ func asyncToolInvocation() async throws {
     }
 }
 
-@Test("AsyncMCPTool discovery works")
+@Test("Async tool discovery works")
 func asyncToolDiscovery() {
     let params = AsyncGreet.discoverParameters()
     #expect(params.count == 1)
@@ -1486,6 +1486,47 @@ func serverRespondsToNotificationWithID() async throws {
     #expect(response?["result"] != nil)
 }
 
+@Test("Server handles a JSON-RPC batch and returns an array of responses")
+func serverBatchRequests() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [
+        try JSONSerialization.data(withJSONObject: [
+            ["jsonrpc": "2.0", "id": 1, "method": "ping"],
+            ["jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": [:]],
+        ])
+    ]
+
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport) { Greet() }
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let batch = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [[String: Any]]
+    #expect(batch?.count == 2)
+    guard let batch else {
+        Issue.record("Expected an array of responses")
+        return
+    }
+    #expect(batch[0]["id"] as? Int == 1)
+    #expect(batch[1]["id"] as? Int == 2)
+    let result = batch[1]["result"] as? [String: Any]
+    let tools = result?["tools"] as? [[String: Any]]
+    #expect(tools?.contains { ($0["name"] as? String) == "greet" } == true)
+}
+
+@Test("Empty JSON-RPC batch is an Invalid Request")
+func serverEmptyBatchInvalidRequest() async throws {
+    let transport = EOFMockTransport()
+    transport.receivedMessages = [Data("[]".utf8)]
+
+    let server = MCPServer(name: "T", version: "1.0.0", transport: transport) { Greet() }
+    try await server.runService()
+
+    #expect(transport.sentMessages.count == 1)
+    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let error = response?["error"] as? [String: Any]
+    #expect(error?["code"] as? Int == -32600)
+}
+
 @Test("Server maps a missing required argument to -32602")
 func serverMissingArgumentInvalidParams() async throws {
     let transport = EOFMockTransport()
@@ -1828,6 +1869,36 @@ enum GeomTools {
     static func makePoint(x: Int, y: Int) -> Point { Point(x: x, y: y) }
 }
 
+enum DocTools {
+    /// Greets a person.
+    /// - Parameter name: The person to greet.
+    /// - Parameter count: How many times to repeat.
+    @FuncTool(description: "Greet")
+    static func greet(name: String, count: Int = 1) -> String { name }
+}
+
+@Test("FuncTool surfaces documented parameter descriptions in the schema")
+func funcToolParameterDescriptions() {
+    let params = DocTools.greetTool.discoverParameters()
+    #expect(params.first { $0.name == "name" }?.description == "The person to greet.")
+    #expect(params.first { $0.name == "count" }?.description == "How many times to repeat.")
+}
+
+enum SectionDocTool {
+    /// - Parameters:
+    ///   - left: The left operand.
+    ///   - right: The right operand.
+    @FuncTool(description: "Add")
+    static func add(left: Int, right: Int = 2) -> Int { left + right }
+}
+
+@Test("FuncTool accepts the - Parameters: doc section spelling")
+func funcToolSectionParameterDescriptions() {
+    let params = SectionDocTool.addTool.discoverParameters()
+    #expect(params.first { $0.name == "left" }?.description == "The left operand.")
+    #expect(params.first { $0.name == "right" }?.description == "The right operand.")
+}
+
 enum SideEffectTools {
     @FuncTool(description: "Notify")
     static func notifyToDo(message: String) -> Void { _ = message }
@@ -2158,6 +2229,10 @@ func tcpTransportEndToEnd() async throws {
         return
     }
 
+    // The server itself must expose the ephemeral bind end-to-end.
+    #expect(server.boundPort == port)
+    #expect(server.boundAddress?.port == port)
+
     let initialize = try RawSocketClient.request(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"clientInfo\":{\"name\":\"probe\",\"version\":\"1\"}}}\n",
         port: port
@@ -2427,6 +2502,31 @@ func codableOptionalParameterInjection() throws {
 
     try tool.apply(arguments: ["optionalName": NSNull()])
     #expect(tool.optionalName == nil)
+}
+
+@MCPCommand(description: "Untyped defaults")
+struct UntypedDefaultsCommand {
+    @Argument var count = 42
+    @Option var ratio = 1.5
+    @Flag var ok = true
+    func run() async throws -> String { "\(count) \(ratio) \(ok)" }
+}
+
+@Test("Untyped wrapper properties infer their schema types from the initializer")
+func untypedDefaultsInferTypes() {
+    let params = UntypedDefaultsCommand.discoverParameters()
+    #expect(params.first { $0.name == "count" }?.typeName == "Int")
+    #expect(params.first { $0.name == "ratio" }?.typeName == "Double")
+    #expect(params.first { $0.name == "ok" }?.typeName == "Bool")
+}
+
+@Test("Custom object parameters advertise additionalProperties: false")
+func objectSchemaIsStrict() {
+    let schema = JSONSchemaBuilder.buildSchema(for: CodableProbe.self)
+    let properties = schema["properties"] as? [String: Any]
+    let origin = properties?["origin"] as? [String: Any]
+    #expect(origin?["type"] as? String == "object")
+    #expect(origin?["additionalProperties"] as? Bool == false)
 }
 
 @MCPCommand(description: "Void side effect")

@@ -79,34 +79,6 @@ public protocol MCPTool: Sendable {
     mutating func invoke(context: MCPContext) async throws -> MCPToolResult
 }
 
-// MARK: - AsyncMCPTool
-
-/// A marker protocol for tools that perform asynchronous work.
-///
-/// Conform to this protocol to indicate that your tool performs async
-/// operations. The framework can use this information for scheduling
-/// and resource management.
-///
-/// When using the ``MCPCommand`` macro, the macro automatically detects
-/// whether your ``run()`` method is async or sync and generates the
-/// appropriate ``MCPTool/invoke(context:)`` implementation. You do not
-/// need to conform to ``AsyncMCPTool`` explicitly when using the macro.
-///
-/// ```swift
-/// struct FetchWeather: AsyncMCPTool {
-///     static let configuration = MCPToolConfiguration(...)
-///
-///     @Argument(description: "The city name")
-///     var city: String = ""
-///
-///     func invoke(context: MCPContext) async throws -> MCPToolResult {
-///         let data = try await URLSession.shared.data(from: url)
-///         return .text(String(decoding: data, as: UTF8.self))
-///     }
-/// }
-/// ```
-public protocol AsyncMCPTool: MCPTool {}
-
 // MARK: - Default configuration
 
 extension MCPTool {

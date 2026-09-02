@@ -254,6 +254,12 @@ public macro MCPApplication(
 /// `String(describing:)`. Functions that return `Void` produce an empty text
 /// block. Errors thrown by the function surface as JSON-RPC `-32603` errors.
 ///
+/// ## Parameter descriptions
+///
+/// Parameter descriptions are read from the function's `///` doc comment and
+/// surfaced in the tool's JSON Schema — see the ``FuncTool`` macro
+/// documentation for the supported spellings.
+///
 /// ## Parameter constraints
 ///
 /// Every parameter must carry a label (no `_`-labeled parameters), and `inout`

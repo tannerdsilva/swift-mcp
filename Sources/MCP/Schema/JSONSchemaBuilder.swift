@@ -101,6 +101,14 @@ enum JSONSchemaBuilder: Sendable {
         let jsonType = mapTypeName(param.typeName)
         schema["type"] = jsonType.rawValue
 
+        // Custom Codable types map to a bare object. Advertise that additional
+        // properties are rejected so clients do not invent fields. Nested
+        // field discovery is not possible from a string type name without a
+        // type-introspecting macro — a documented limitation.
+        if jsonType == .object {
+            schema["additionalProperties"] = false
+        }
+
         if let description = param.description {
             schema["description"] = description
         }
