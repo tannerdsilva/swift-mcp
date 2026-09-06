@@ -16,11 +16,11 @@
 /// diagnose and handle failures.
 ///
 /// The framework uses these errors throughout the stack:
-/// - **Argument validation**: ``missingArgument(_:)``, ``typeMismatch(expected:actual:)``
-/// - **Tool routing**: ``toolNotFound(_:)``
-/// - **Protocol errors**: ``jsonRPCError(code:message:)``
-/// - **Transport failures**: ``transportError(_:)``
-/// - **Internal errors**: ``internalError(_:)``
+/// - **Argument validation**: `missingArgument(_:)`, `typeMismatch(expected:actual:)`
+/// - **Tool routing**: `toolNotFound(_:)`
+/// - **Protocol errors**: `jsonRPCError(code:message:)`
+/// - **Transport failures**: `transportError(_:)`
+/// - **Internal errors**: `internalError(_:)`
 ///
 /// ```swift
 /// throw MCPError.missingArgument("name")
@@ -80,7 +80,7 @@ extension MCPError: CustomStringConvertible {
     /// A human-readable description of the error, suitable for display.
     ///
     /// Foundation-free replacement for the `LocalizedError` conformance:
-    /// `String(describing:)` and string interpolation of an `MCPError` yield
+    /// `String(describing:)` and string interpolation of an ``MCPError`` yield
     /// these messages.
     public var description: String {
         switch self {

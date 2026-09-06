@@ -15,7 +15,7 @@
 ///
 /// Conform your tool type to ``MCPTool`` and declare its parameters using the
 /// ``Argument``, ``Option``, and ``Flag`` property wrappers, or use the
-/// ``MCPCommand`` macro for automatic conformance generation.
+/// `MCPCommand` macro for automatic conformance generation.
 ///
 /// ## Direct Conformance
 ///
@@ -71,7 +71,7 @@ public protocol MCPTool: Sendable {
     /// Invoke the tool's logic.
     ///
     /// Before this method is called, the framework sets the tool's property
-    /// wrapper values to those provided by the caller via ``apply(arguments:)``.
+    /// wrapper values to those provided by the caller via `apply(arguments:)`.
     /// Access them directly within your implementation.
     ///
     /// - Parameter context: Contextual information about the invocation.
@@ -127,8 +127,8 @@ extension MCPTool {
 /// ``MCPTool/invoke(context:)``. The context provides access to the
 /// raw arguments dictionary and information about the caller.
 ///
-/// - ``arguments``: The raw arguments dictionary passed to the tool.
-/// - ``callerInfo``: Information about the caller, including access level.
+/// - `arguments`: The raw arguments dictionary passed to the tool.
+/// - `callerInfo`: Information about the caller, including access level.
 public struct MCPContext: @unchecked Sendable {
     /// The raw arguments dictionary passed to the tool.
     public let arguments: [String: Any]

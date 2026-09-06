@@ -212,7 +212,7 @@ func generateChart(from data: String) -> String {
 
 ### Throwing Errors
 
-Throw `MCPError` for structured error responses:
+Throw ``MCPError`` for structured error responses:
 
 ```swift
 @MCPCommand(description: "Divide two numbers")

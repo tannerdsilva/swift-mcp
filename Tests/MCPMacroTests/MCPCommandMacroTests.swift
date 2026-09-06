@@ -31,10 +31,7 @@ private func assertMCPExpansion(
     // independently expand the same source and verify well-formedness.
     let file = Parser.parse(source: originalSource)
     let context = BasicMacroExpansionContext()
-    guard let expanded = try? file.expand(macros: macros, in: context) else {
-        Issue.record("expansion raised an error — generated output is not well-formed")
-        return
-    }
+    let expanded = file.expand(macros: macros, contextGenerator: { _ in context })
     let expandedText = "\(expanded)"
     for diagnostic in context.diagnostics {
         Issue.record("macro emitted diagnostic: \(diagnostic.message)")
@@ -53,14 +50,10 @@ private func assertMCPExpansionFails(
 ) {
     let file = Parser.parse(source: originalSource)
     let context = BasicMacroExpansionContext()
-    do {
-        let expanded = try file.expand(macros: macros, in: context)
-        let diagnostics = context.diagnostics
-        if diagnostics.isEmpty {
-            Issue.record("expected expansion to fail, but it produced: \(expanded)")
-        }
-    } catch {
-        // thrown misuse — the expected outcome
+    let expanded = file.expand(macros: macros, contextGenerator: { _ in context })
+    let diagnostics = context.diagnostics
+    if diagnostics.isEmpty {
+        Issue.record("expected expansion to fail, but it produced: \(expanded)")
     }
 }
 
@@ -1414,7 +1407,7 @@ func mcpCommandNoMemberRunFallsBack() {
             }
 
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
-                        let output = try run()
+                        let output = run()
                         return .text(String(describing: output))
             }
         }

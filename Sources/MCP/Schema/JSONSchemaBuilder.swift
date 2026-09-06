@@ -25,16 +25,16 @@ enum JSONSchemaType: String, Sendable {
 
 /// A builder that generates JSON Schema Draft 7 schemas from MCP tool parameter metadata.
 ///
-/// ``JSONSchemaBuilder`` is used internally by the framework to produce the
+/// `JSONSchemaBuilder` is used internally by the framework to produce the
 /// `inputSchema` field for each tool in the `tools/list` response. It maps
 /// Swift type names to JSON Schema types and builds a complete schema object
 /// with required fields, descriptions, and property definitions.
 ///
 /// The builder supports the following Swift-to-JSON-Schema type mappings:
-/// - ``String`` → `"string"`
-/// - ``Int``, ``Int8``–``Int64``, ``UInt``, ``UInt8``–``UInt64`` → `"integer"`
-/// - ``Double``, ``Float``, ``Float16``, ``CGFloat`` → `"number"`
-/// - ``Bool`` → `"boolean"`
+/// - `String` → `"string"`
+/// - `Int`, `Int8`–`Int64`, `UInt`, `UInt8`–`UInt64` → `"integer"`
+/// - `Double`, `Float`, `Float16`, `CGFloat` → `"number"`
+/// - `Bool` → `"boolean"`
 /// - `Array<T>` → `"array"`
 /// - Everything else → `"object"`
 enum JSONSchemaBuilder: Sendable {
@@ -141,7 +141,7 @@ enum JSONSchemaBuilder: Sendable {
     /// Maps a Swift type name to a JSON Schema type.
     ///
     /// - Parameter typeName: The Swift type name (e.g. "String", "Int", "Bool").
-    /// - Returns: The corresponding ``JSONSchemaType``.
+    /// - Returns: The corresponding `JSONSchemaType`.
     public static func mapTypeName(_ typeName: String) -> JSONSchemaType {
         switch typeName {
         case "String":

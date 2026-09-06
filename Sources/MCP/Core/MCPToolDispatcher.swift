@@ -13,7 +13,7 @@
 ///
 /// Produced by an ``MCPToolDispatcher`` for the `tools/list` catalog. The
 /// server converts a descriptor into a wire `MCPToolDefinition` by building
-/// the JSON Schema from ``parameters`` — keeping schema generation, which
+/// the JSON Schema from `parameters` — keeping schema generation, which
 /// depends on internal JSONSchemaBuilder, on the framework side.
 public struct MCPToolDescriptor: Sendable, Equatable {
     /// The registered tool name (the key used by `tools/call`).
@@ -38,12 +38,12 @@ public struct MCPToolDescriptor: Sendable, Equatable {
 
 /// A compile-time-known, exhaustive dispatch surface for a fixed set of tools.
 ///
-/// ``MCPApplication`` generates a conformance on the application struct:
+/// `MCPApplication` generates a conformance on the application struct:
 /// every method is an exhaustive switch over the generated ``MCPToolID``
 /// enum or an if-chain over each tool's *static* ``MCPTool/toolName``, so the
 /// server routes `tools/list` and `tools/call` through **concrete** types —
 /// no runtime type erasure in the registry. The only existential is the
-/// single ``dispatcher`` the server holds to reach this surface.
+/// single `dispatcher` the server holds to reach this surface.
 ///
 /// A server may hold both a dispatcher (macro-generated tools) and a
 /// dynamically-registered tool set (via ``MCPServer/register(_:)`` and
@@ -53,10 +53,10 @@ public struct MCPToolDescriptor: Sendable, Equatable {
 ///
 /// The three requirements are the entire runtime contract this framework
 /// places on a tool set:
-/// - ``toolCatalog(for:)`` answers the accessible `tools/list` subset.
-/// - ``requiredAccess(named:)`` answers the access gate so the server enforces
+/// - `toolCatalog(for:)` answers the accessible `tools/list` subset.
+/// - `requiredAccess(named:)` answers the access gate so the server enforces
 ///   authorization uniformly before any invocation.
-/// - ``callTool(named:arguments:context:)`` performs the typed dispatch.
+/// - `callTool(named:arguments:context:)` performs the typed dispatch.
 public protocol MCPToolDispatcher: Sendable {
     /// The `tools/list` catalog, filtered to what this caller may see.
     ///
@@ -72,7 +72,7 @@ public protocol MCPToolDispatcher: Sendable {
 
     /// Invokes the named tool with typed, exhaustive dispatch.
     ///
-    /// The server has already enforced ``requiredAccess(named:)`` before
+    /// The server has already enforced `requiredAccess(named:)` before
     /// calling this method, so the generated implementation applies arguments
     /// and invokes the tool's concrete type directly.
     ///

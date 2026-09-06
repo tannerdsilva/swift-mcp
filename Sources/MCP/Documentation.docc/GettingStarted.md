@@ -33,11 +33,11 @@ targets: [
 ```
 
 The macro implementation ships inside the `MCP` product — no extra dependency
-is required to use ``MCPCommand`` and friends.
+is required to use `MCPCommand` and friends.
 
 ## Step 3: Define a Tool
 
-The simplest way is the ``FuncTool`` macro on a function:
+The simplest way is the `FuncTool` macro on a function:
 
 ```swift
 import MCP
@@ -52,7 +52,7 @@ enum MyTools {
 }
 ```
 
-The macro generates an `MCPTool`-conforming struct named `MyTools.echoTool`.
+The macro generates an ``MCPTool``-conforming struct named `MyTools.echoTool`.
 Parameters without defaults become `@Argument` (required), parameters with
 defaults become `@Option` (optional), and `Bool` parameters with default
 `false` become `@Flag`.

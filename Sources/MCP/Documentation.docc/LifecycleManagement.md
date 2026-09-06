@@ -4,7 +4,7 @@ How swift-mcp integrates with Swift Service Lifecycle for process lifecycle mana
 
 ## Overview
 
-``MCPServer`` conforms to the ``Service`` protocol from Swift Service Lifecycle. This means the server is managed by a ``ServiceGroup``, which provides signal-based graceful shutdown, service dependency ordering, and structured concurrency.
+``MCPServer`` conforms to the `Service` protocol from Swift Service Lifecycle. This means the server is managed by a `ServiceGroup`, which provides signal-based graceful shutdown, service dependency ordering, and structured concurrency.
 
 ## Why Service Lifecycle?
 
@@ -17,7 +17,7 @@ Swift Service Lifecycle is the standard way to manage long-running server proces
 
 ## Running the Server
 
-### Recommended: ``runService()``
+### Recommended: `runService()`
 
 ```swift
 let server = MCPServer(name: "demo", version: "1.0.0") {
@@ -27,20 +27,20 @@ try await server.runService()
 // SIGTERM or SIGINT triggers graceful shutdown
 ```
 
-This creates a ``ServiceGroup`` with the server as the only service, configures
+This creates a `ServiceGroup` with the server as the only service, configures
 signal handling for SIGTERM and SIGINT, and configures the server service with
-``.gracefullyShutdownGroup`` success termination — so the process exits cleanly
+`.gracefullyShutdownGroup` success termination — so the process exits cleanly
 both when a signal is received and when the transport completes on its own
-(client EOF on stdio, or listener close on TCP). ``runService()`` returns
+(client EOF on stdio, or listener close on TCP). `runService()` returns
 normally in both cases.
 
 ### Custom ServiceGroup
 
-For full control, create your own ``ServiceGroup``. When you want a standalone
+For full control, create your own `ServiceGroup`. When you want a standalone
 process that exits when the MCP session ends, give the server the same
-``.gracefullyShutdownGroup`` success behavior ``runService()`` uses; a host
-that should keep running after the session ends can instead use ``.ignore``
-(or the default ``.cancelGroup``, which surfaces a completed session as an
+`.gracefullyShutdownGroup` success behavior `runService()` uses; a host
+that should keep running after the session ends can instead use `.ignore`
+(or the default `.cancelGroup`, which surfaces a completed session as an
 error).
 
 ```swift
@@ -64,7 +64,7 @@ try await serviceGroup.run()
 
 ### Multiple Services
 
-The MCP server can run alongside other services in the same ``ServiceGroup``:
+The MCP server can run alongside other services in the same `ServiceGroup`:
 
 ```swift
 let serviceGroup = ServiceGroup(
@@ -84,7 +84,7 @@ try await serviceGroup.run()
 
 ## Shutdown Behavior
 
-A ``ServiceGroup`` shuts its services down in reverse declaration order. For
+A `ServiceGroup` shuts its services down in reverse declaration order. For
 the MCP server:
 
 - **Signal-initiated shutdown**: the graceful-shutdown handler registered in
@@ -106,10 +106,10 @@ For the MCP server specifically:
 ## Transport Lifecycle
 
 ``MCPServer/run()`` drives the transport directly — it is not wrapped in a
-nested ``ServiceGroup``. A graceful-shutdown handler around the transport's
-``start(handler:)`` fans ``MCPTransport/stop()`` out to the transport, so any
-transport can unwind promptly on shutdown. ``runService()`` owns the outermost
-``ServiceGroup`` and its termination behavior; hosts embedding the server in
+nested `ServiceGroup`. A graceful-shutdown handler around the transport's
+`start(handler:)` fans ``MCPTransport/stop()`` out to the transport, so any
+transport can unwind promptly on shutdown. `runService()` owns the outermost
+`ServiceGroup` and its termination behavior; hosts embedding the server in
 their own group configure that behavior themselves (see above).
 
 ## Related Articles

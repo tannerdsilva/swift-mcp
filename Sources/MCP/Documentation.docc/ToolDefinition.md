@@ -6,9 +6,9 @@ How to define MCP tools using property wrappers and macros.
 
 Tools are the core concept in MCP. You can define them three ways:
 
-1. **``FuncTool`` macro** — apply to a function to get an automatic
+1. **`FuncTool` macro** — apply to a function to get an automatic
    ``MCPTool``-conforming struct
-2. **``MCPCommand`` macro** — apply to a struct with a `run()` method
+2. **`MCPCommand` macro** — apply to a struct with a `run()` method
 3. **Direct conformance** — conform your type directly to ``MCPTool`` for full
    control
 
@@ -27,9 +27,9 @@ enum MyTools {
 ```
 
 This generates a struct named `MyTools.greetTool` conforming to ``MCPTool``.
-Parameters without defaults become ``@Argument``, parameters with defaults
-become ``@Option``, and `Bool` parameters with default `false` become
-``@Flag``.
+Parameters without defaults become `@Argument`, parameters with defaults
+become `@Option`, and `Bool` parameters with default `false` become
+`@Flag`.
 
 ```swift
 let server = MCPServer(name: "demo", version: "1.0.0") {
@@ -38,7 +38,7 @@ let server = MCPServer(name: "demo", version: "1.0.0") {
 try await server.runService()
 ```
 
-> ``FuncTool`` is a peer macro and cannot introduce arbitrary names at global
+> `FuncTool` is a peer macro and cannot introduce arbitrary names at global
 > scope, so the annotated function must live inside a type. See the
 > <doc:MacroGuide> for details.
 
@@ -92,7 +92,7 @@ struct Greet: MCPTool {
 
 The default `discoverParameters()` returns an empty list and the default
 `apply(arguments:)` is a no-op. If a direct conformer needs parameter
-discovery and injection, either use ``MCPCommand`` or provide your own
+discovery and injection, either use `MCPCommand` or provide your own
 `discoverParameters()` / `apply(arguments:)` (for example, by reusing the
 property wrappers' `_setValue(_:)` through a testable support type).
 
@@ -176,7 +176,7 @@ struct Print {
 
 ## Return Types
 
-The `run()` method of an ``MCPCommand``-based tool can return any value; the
+The `run()` method of an `MCPCommand`-based tool can return any value; the
 macro wraps the return value in ``MCPToolResult/text(_:)`` via
 `String(describing:)`.
 
@@ -187,7 +187,7 @@ macro wraps the return value in ``MCPToolResult/text(_:)`` via
 | `Bool` | `.text("true")` |
 | `Void` | `.text("")` — an empty text block |
 
-``FuncTool`` behaves identically for its wrapped functions.
+`FuncTool` behaves identically for its wrapped functions.
 
 For custom result types, implement ``MCPTool/invoke(context:)`` directly and
 return ``MCPToolResult``.

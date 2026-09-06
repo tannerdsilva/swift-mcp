@@ -11,7 +11,7 @@
 
 /// Configuration metadata for an MCP tool.
 ///
-/// Provide a configuration as the `configuration` property of your `MCPTool`
+/// Provide a configuration as the `configuration` property of your ``MCPTool``
 /// type.
 ///
 /// ```swift

@@ -11,10 +11,10 @@
 
 // MARK: - Tool Property Wrapper
 
-/// Marks a property as an MCP tool for the ``MCPApplication`` macro.
+/// Marks a property as an MCP tool for the `MCPApplication` macro.
 ///
 /// Use this property wrapper on stored properties of a struct annotated with
-/// ``MCPApplication``. The macro discovers all `@Tool` properties and
+/// `MCPApplication`. The macro discovers all `@Tool` properties and
 /// generates the typed dispatch surface that serves them.
 ///
 /// ```swift
@@ -26,7 +26,7 @@
 /// }
 /// ```
 ///
-/// The `available` argument is **compile-time only**: ``MCPApplication``
+/// The `available` argument is **compile-time only**: `MCPApplication`
 /// matches `.debug` textually and guards that tool's enum case, dispatch
 /// branch, catalog entry, and access gate with `#if DEBUG`, so a release build
 /// neither lists nor invokes it. The value is not stored at runtime.
@@ -44,7 +44,7 @@ public struct Tool<T: MCPTool> {
 
     /// Creates a new tool wrapper with the given availability.
     ///
-    /// The availability is consumed at compile time by ``MCPApplication`` and
+    /// The availability is consumed at compile time by `MCPApplication` and
     /// is not stored at runtime.
     ///
     /// - Parameters:

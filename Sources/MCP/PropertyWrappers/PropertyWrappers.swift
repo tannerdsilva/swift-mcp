@@ -15,7 +15,7 @@ import Foundation
 
 /// A required parameter for an MCP tool.
 ///
-/// Use with the ``MCPCommand`` macro or in a type that conforms directly
+/// Use with the `MCPCommand` macro or in a type that conforms directly
 /// to ``MCPTool``.
 ///
 /// Parameters marked with `@Argument` are required and must be provided by
@@ -75,7 +75,7 @@ public struct Argument<Value: Codable & Sendable>: MCPParamProtocol {
 
 /// An optional parameter with a default value for an MCP tool.
 ///
-/// Use with the ``MCPCommand`` macro or in a type that conforms directly
+/// Use with the `MCPCommand` macro or in a type that conforms directly
 /// to ``MCPTool``.
 ///
 /// Parameters marked with `@Option` are optional. The initial value is used
@@ -133,7 +133,7 @@ public struct Option<Value: Codable & Sendable>: MCPParamProtocol {
 
 /// A boolean flag for an MCP tool.
 ///
-/// Use with the ``MCPCommand`` macro or in a type that conforms directly
+/// Use with the `MCPCommand` macro or in a type that conforms directly
 /// to ``MCPTool``.
 ///
 /// Flags are boolean parameters that default to `false`. They are set to
@@ -204,7 +204,7 @@ public struct Flag: MCPParamProtocol {
 
 /// A container that flattens a group of parameters into the parent tool.
 ///
-/// Use with the ``MCPCommand`` macro or in a type that conforms directly
+/// Use with the `MCPCommand` macro or in a type that conforms directly
 /// to ``MCPTool``. The group struct should use ``Argument``, ``Option``, and
 /// ``Flag`` wrappers for its properties; they are flattened into the parent's
 /// parameter namespace.
@@ -227,7 +227,7 @@ public struct Flag: MCPParamProtocol {
 /// ```
 ///
 /// The group's parameters (`verbose`, `outputPath`) are flattened into the
-/// parent's parameter namespace at compile time by the ``MCPCommand`` macro.
+/// parent's parameter namespace at compile time by the `MCPCommand` macro.
 ///
 /// - Warning: This wrapper is a value type whose mutable state is a normal
 ///   stored property; mutating methods follow value semantics. Each tool
@@ -248,7 +248,7 @@ public struct OptionGroup<Value: StaticMCPGroup>: Sendable {
     /// Applies arguments to the group's sub-parameters.
     ///
     /// Forwards to the macro-generated ``StaticMCPGroup/mcpApply(arguments:)``
-    /// implementation synthesized by ``MCPOptionGroup``.
+    /// implementation synthesized by `MCPOptionGroup`.
     ///
     /// - Parameter arguments: A dictionary of argument names to values.
     public mutating func mcpApply(arguments: [String: Any]) throws {

@@ -33,9 +33,9 @@ swift-mcp is organized into layers:
 ### Property wrappers are value types
 
 All property wrappers (`@Argument`, `@Option`, `@Flag`, `@OptionGroup`) are
-implemented as **structs** (value types) conforming to ``MCPParamProtocol``.
+implemented as **structs** (value types) conforming to `MCPParamProtocol`.
 Option-group structs gain a ``StaticMCPGroup`` conformance synthesized by
-``MCPOptionGroup``. No `AnyObject` constraint and no `@unchecked Sendable`
+`MCPOptionGroup`. No `AnyObject` constraint and no `@unchecked Sendable`
 are needed.
 
 **Why**: parameter discovery and argument injection are generated at compile
@@ -45,8 +45,8 @@ for free.
 
 ### Compile-time parameter discovery
 
-Parameter discovery is generated at compile time by the ``MCPCommand`` /
-``FuncTool`` macros — no reflection, no manual registration.
+Parameter discovery is generated at compile time by the `MCPCommand` /
+`FuncTool` macros — no reflection, no manual registration.
 
 **How it works**:
 
@@ -59,7 +59,7 @@ Parameter discovery is generated at compile time by the ``MCPCommand`` /
 
 ### Option-group macro
 
-``MCPOptionGroup`` attaches to an option-group struct and generates its
+`MCPOptionGroup` attaches to an option-group struct and generates its
 flattened parameter metadata plus an `mcpApply(arguments:)` method on the
 group type itself:
 
@@ -72,20 +72,20 @@ struct SharedOptions {
 ```
 
 **Why**: generating the group's metadata and apply logic at compile time lets
-the parent ``MCPCommand`` macro inline the group's parameters without runtime
+the parent `MCPCommand` macro inline the group's parameters without runtime
 reflection, and the group stays a plain value type.
 
 ### One wrapper set
 
 The project has a **single set** of property wrappers — `@Argument`, `@Option`,
 `@Flag`, `@OptionGroup` — used both with direct ``MCPTool`` conformance and
-with the ``MCPCommand`` macro. Option-group structs gain a ``StaticMCPGroup``
-conformance from ``MCPOptionGroup``, so the macros generate identical code for
+with the `MCPCommand` macro. Option-group structs gain a ``StaticMCPGroup``
+conformance from `MCPOptionGroup`, so the macros generate identical code for
 either usage.
 
 ### Macro architecture
 
-``MCPCommand`` is an ``@attached(extension, conformances: MCPTool)`` macro. It:
+`MCPCommand` is an `@attached(extension, conformances: MCPTool)` macro. It:
 
 1. Parses the struct's member declarations using SwiftSyntax.
 2. Identifies `@Argument`, `@Option`, `@Flag`, and `@OptionGroup` wrapped
@@ -93,7 +93,7 @@ either usage.
 3. Generates an extension with ``MCPTool`` conformance — including static
    `discoverParameters()` and `apply(arguments:)`.
 
-``MCPApplication`` is a ``@attached(member)`` + ``@attached(extension)``
+`MCPApplication` is a `@attached(member)` + `@attached(extension)`
 macro. It:
 
 1. Reads all `@Tool` property values.
@@ -103,7 +103,7 @@ macro. It:
 4. Generates a ``MCPToolDispatcher`` conformance so the server serves
    `tools/list` and `tools/call` through that typed switch.
 5. Generates a `static func main()` that builds an ``MCPServer`` with the
-   app as its dispatcher and runs it via ``MCPServer/runService()``.
+   app as its dispatcher and runs it via `MCPServer/runService()`.
 
 The macro implementation lives in the separate `MCPMacros` target, which the
 `MCP` library target depends on. This keeps SwiftSyntax out of the runtime
@@ -122,7 +122,7 @@ conforming to the protocol and injecting them via
 ### Compile-time dispatch, end to end
 
 A macro-generated server is served entirely through typed dispatch. The
-``MCPToolDispatcher`` surface that ``MCPApplication`` synthesizes builds
+``MCPToolDispatcher`` surface that `MCPApplication` synthesizes builds
 `tools/list` and `tools/call` from each tool's **static** configuration and
 parameter metadata — the `_invokeTool` switch selects the concrete type per
 branch, so no `any MCPTool` exists in the macro path. The only existential a
@@ -139,10 +139,10 @@ removing any of them would cost ergonomics without buying hot-path
 performance:
 
 - **The JSON boundary.** `tools/call` arguments and `tools/list` schemas are
-  heterogeneous JSON: `[String: Any]` at the wire, `AnyCodable` in the
+  heterogeneous JSON: `[String: Any]` at the wire, ``AnyCodable`` in the
   protocol layer. The macro-generated `apply` extracts each parameter onto
   concrete wrapper types, so `Any` never crosses into a tool.
-- **`MCPTransport`.** One value held per server; dispatch is a single
+- **``MCPTransport``.** One value held per server; dispatch is a single
   interface call on `start`/`stop` per lifetime — zero per-message cost.
 - **`any Encoder` / `any Decoder`.** Part of the `Codable` contract itself.
 - **The dynamic registry.** ``MCPServer/register(_:)`` and
@@ -158,16 +158,16 @@ performance:
 ``MCPServer`` conforms to the `Service` protocol from `swift-service-lifecycle`.
 ``MCPServer/run()`` drives the transport directly: when the transport completes —
 client EOF on stdio, or listener close on TCP — the service returns, and the
-enclosing ``ServiceGroup`` applies the service's configured success termination
+enclosing `ServiceGroup` applies the service's configured success termination
 behavior. A graceful-shutdown handler registered in `run()` fans
 ``MCPTransport/stop()`` out to the transport, so signal-initiated shutdown wakes
 the poll-based stdio read loop promptly.
 
 ``MCPServer/runService(gracefulShutdownSignals:)`` configures the outer group
 with `.gracefullyShutdownGroup` success termination, so a completed session ends
-the process cleanly. Hosts embedding ``MCPServer`` in their own ``ServiceGroup``
-choose that behavior themselves (``cancelGroup``, ``gracefullyShutdownGroup``,
-or ``ignore``). This keeps the server composable with other services in the
+the process cleanly. Hosts embedding ``MCPServer`` in their own `ServiceGroup`
+choose that behavior themselves (`cancelGroup`, `gracefullyShutdownGroup`,
+or `ignore`). This keeps the server composable with other services in the
 same group while giving every host control over session-end semantics.
 
 ## Data Flow

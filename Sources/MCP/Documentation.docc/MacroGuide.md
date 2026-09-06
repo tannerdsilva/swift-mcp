@@ -1,16 +1,16 @@
 # Macro Guide
 
-How the ``FuncTool``, ``MCPCommand``, ``MCPOptionGroup``, and ``MCPApplication``
+How the `FuncTool`, `MCPCommand`, `MCPOptionGroup`, and `MCPApplication`
 macros work, and how to use them effectively.
 
 ## Overview
 
 swift-mcp provides four Swift macros that generate boilerplate at compile time:
 
-- ``FuncTool`` — generates an ``MCPTool``-conforming struct from a static function
-- ``MCPCommand`` — generates an ``MCPTool`` conformance for a struct with a `run()` method
-- ``MCPOptionGroup`` — generates compile-time metadata for an option-group struct
-- ``MCPApplication`` — generates a server entry point with exhaustive dispatch
+- `FuncTool` — generates an ``MCPTool``-conforming struct from a static function
+- `MCPCommand` — generates an ``MCPTool`` conformance for a struct with a `run()` method
+- `MCPOptionGroup` — generates compile-time metadata for an option-group struct
+- `MCPApplication` — generates a server entry point with exhaustive dispatch
 
 All macros are available to consumers through the `MCP` product alone — the
 macros live in the `MCPMacros` target, which the `MCP` library target depends
@@ -20,7 +20,7 @@ on.
 
 ### What It Does
 
-Applied to a function, ``FuncTool`` generates a struct named
+Applied to a function, `FuncTool` generates a struct named
 `{FunctionName}Tool` (e.g. `greetTool`) that conforms to ``MCPTool``.
 
 ### Parameter Classification
@@ -29,9 +29,9 @@ The macro automatically classifies function parameters:
 
 | Parameter Type | Classification | Wrapper |
 |---|---|---|
-| No default value | Required argument | ``@Argument`` |
-| Has default value, non-Bool | Optional option | ``@Option`` |
-| Bool with default `false` | Flag | ``@Flag`` |
+| No default value | Required argument | `@Argument` |
+| Has default value, non-Bool | Optional option | `@Option` |
+| Bool with default `false` | Flag | `@Flag` |
 
 ### Parameters
 
@@ -39,11 +39,11 @@ The macro automatically classifies function parameters:
 |---|---|---|---|
 | `description` | `String` | `""` | Human-readable description |
 | `name` | `String?` | `nil` | Explicit tool name (defaults to function name) |
-| `requiredAccess` | `AccessLevel` | `.public` | Minimum access level |
+| `requiredAccess` | ``AccessLevel`` | `.public` | Minimum access level |
 
 ### Scope Constraint
 
-``FuncTool`` is a *peer* macro that introduces a new type at its attachment
+`FuncTool` is a *peer* macro that introduces a new type at its attachment
 scope. Because peer macros are not allowed to introduce arbitrary names at
 global scope, the annotated function must be nested inside a type — and
 because the generated `run()` calls it unqualified, it must be `static`:
@@ -70,7 +70,7 @@ the compiler rejects outright) fails with a diagnostic.
 
 Any return type is supported. The generated struct's `run()` returns the
 annotated function's declared type, and `invoke` renders the value to text via
-`String(describing:)` — exactly like ``MCPCommand``. A function that returns
+`String(describing:)` — exactly like `MCPCommand`. A function that returns
 `Void` produces an empty text block. Errors thrown by the function surface as
 JSON-RPC `-32603` errors.
 
@@ -79,14 +79,14 @@ JSON-RPC `-32603` errors.
 Every parameter must carry an external label. `_`-labeled, `inout`, and
 variadic parameters are rejected with a diagnostic: they cannot be addressed
 as JSON-valued MCP arguments. `@FuncTool` parameters carry no per-parameter
-descriptions or enum constraints (use ``MCPCommand`` on a struct when you need
+descriptions or enum constraints (use `MCPCommand` on a struct when you need
 those).
 
 ## MCPCommand
 
 ### What It Does
 
-Applied to a struct, ``MCPCommand`` generates an ``MCPTool`` conformance in an
+Applied to a struct, `MCPCommand` generates an ``MCPTool`` conformance in an
 extension:
 
 1. A static ``MCPToolConfiguration``.
@@ -194,14 +194,14 @@ extension Greet: MCPTool {
 
 - Applied to **structs** only.
 - The struct must have a `run()` method (sync or async; throwing or not).
-- Properties must use ``@Argument``, ``@Option``, ``@Flag``, or
-  ``@OptionGroup``.
+- Properties must use `@Argument`, `@Option`, `@Flag`, or
+  `@OptionGroup`.
 
 ## MCPOptionGroup
 
-Applied to an option-group struct, ``MCPOptionGroup`` synthesizes a
+Applied to an option-group struct, `MCPOptionGroup` synthesizes a
 ``StaticMCPGroup`` conformance: static `mcpParameters` metadata and an
-`mcpApply(arguments:)` method. The parent ``MCPCommand`` conformance inlines
+`mcpApply(arguments:)` method. The parent `MCPCommand` conformance inlines
 the group's parameters at compile time.
 
 ```swift
@@ -212,16 +212,16 @@ struct SharedOptions {
 }
 ```
 
-Groups are shallow — nested ``@OptionGroup`` properties are rejected with a
+Groups are shallow — nested `@OptionGroup` properties are rejected with a
 compiler diagnostic.
 
 ## MCPApplication
 
 ### What It Does
 
-Applied to a struct with ``@Tool`` properties, ``MCPApplication`` generates:
+Applied to a struct with `@Tool` properties, `MCPApplication` generates:
 
-1. **``MCPToolID`` enum** — one case per ``@Tool`` property, providing
+1. **``MCPToolID`` enum** — one case per `@Tool` property, providing
    compile-time unique tool names.
 2. **Exhaustive typed dispatch** — a private `_invokeTool` switch over the
    enum, each branch using the tool's concrete configured instance.
@@ -230,7 +230,7 @@ Applied to a struct with ``@Tool`` properties, ``MCPApplication`` generates:
    dispatch all generated from the tools' static configuration). No runtime
    type erasure in the macro path.
 4. **`main()` entry point** — creates the server with the app as its
-   dispatcher and runs via ``MCPServer/runService()``.
+   dispatcher and runs via `MCPServer/runService()`.
 
 ### Usage
 

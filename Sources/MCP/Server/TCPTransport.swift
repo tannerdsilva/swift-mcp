@@ -172,12 +172,12 @@ protocol MCPTransportAddressProviding {
 /// )
 /// ```
 ///
-/// - Warning: This class uses ``@unchecked Sendable`` because `channel`,
+/// - Warning: This class uses `@unchecked Sendable` because `channel`,
 ///   `boundAddress`, `isRunning`, and `stopRequested` are mutated from
-///   ``start(handler:)`` and ``stop()`` — which graceful shutdown deliberately
-///   overlaps. All access is serialized through `stateLock`; a ``stop()`` that
+///   `start(handler:)` and `stop()` — which graceful shutdown deliberately
+///   overlaps. All access is serialized through `stateLock`; a `stop()` that
 ///   lands before the listener is bound records `stopRequested` so the channel
-///   is closed the moment it exists instead of leaving ``start(handler:)``
+///   is closed the moment it exists instead of leaving `start(handler:)`
 ///   blocked on the close future. The `accessResolver` closure is `@Sendable`
 ///   and only read after initialization.
 public final class TCPTransport: MCPTransport, MCPTransportAddressProviding, @unchecked Sendable {
@@ -190,7 +190,7 @@ public final class TCPTransport: MCPTransport, MCPTransportAddressProviding, @un
     private let stateLock = Mutex<()>(())
     private var channel: Channel?
     private var isRunning = false
-    /// Set by ``stop()`` so a stop that lands before the listener is bound is
+    /// Set by `stop()` so a stop that lands before the listener is bound is
     /// honored once the channel exists.
     private var stopRequested = false
     private let accessResolver: @Sendable (String) -> AccessLevel
@@ -247,11 +247,11 @@ public final class TCPTransport: MCPTransport, MCPTransportAddressProviding, @un
     ///   - eventLoopGroup: The NIO event loop group to use.
     ///   - allowIPv4MappedIPv6: Whether to allow IPv4-mapped IPv6 connections.
     ///   - accessResolver: A closure that resolves an IP address to an access
-    ///     level. The default is ``defaultAccessResolver(_:)``, which grants
+    ///     level. The default is `defaultAccessResolver(_:)`, which grants
     ///     ``AccessLevel/admin`` to IPv4 and IPv6 loopback callers.
     ///   - maxMessageSize: The maximum size in bytes of a single
     ///     newline-delimited JSON-RPC message. Defaults to
-    ///     ``defaultMaxMessageSize``.
+    ///     `defaultMaxMessageSize`.
     ///   - logger: An optional logger for transport-level diagnostics.
     public init(
         address: ServerAddress,
@@ -352,7 +352,7 @@ public final class TCPTransport: MCPTransport, MCPTransportAddressProviding, @un
     /// Stops the transport and closes the listening channel.
     ///
     /// If the listener has not been bound yet, the stop is recorded and applied
-    /// the moment the channel appears, so ``start(handler:)`` never deadlocks
+    /// the moment the channel appears, so `start(handler:)` never deadlocks
     /// on a stop that arrived during startup.
     public func stop() async throws {
         let activeChannel: Channel? = stateLock.withLock { _ in

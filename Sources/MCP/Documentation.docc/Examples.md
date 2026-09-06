@@ -26,8 +26,8 @@ error handling, and parameter patterns. Includes examples for:
 
 - Minimal tool with one argument
 - Sync vs async tools
-- Text, `MCPToolResult`, and void return types
-- Error handling with `MCPError` and error results
+- Text, ``MCPToolResult``, and void return types
+- Error handling with ``MCPError`` and error results
 - All parameter types (`@Argument`, `@Option`, `@Flag`)
 - Custom tool names
 - Tools with no parameters or only optionals

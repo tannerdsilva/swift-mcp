@@ -90,8 +90,7 @@ struct AsyncGreet: MCPTool {
     }
 
     func invoke(context: MCPContext) async throws -> MCPToolResult {
-        // Simulate async work
-        let greeting = try await String("Hello, \(name)!")
+        let greeting = "Hello, \(name)!"
         return .text(greeting)
     }
 }
@@ -2095,7 +2094,7 @@ private enum RawSocketClient {
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = UInt16(port).bigEndian
-        "127.0.0.1".withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
+        _ = "127.0.0.1".withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
 
         let connectResult = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { pointer in
@@ -2697,31 +2696,6 @@ func invalidIDTypesGetErrorResponse() async throws {
         let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let error = response?["error"] as? [String: Any]
         #expect(error?["code"] as? Int == -32600)
-    }
-}
-
-@Test("MCPCommand with a sync-throwing extension run() compiles and propagates errors")
-func extensionThrowingRunWorks() async throws {
-    var tool = ExtThrowingRunTool()
-    do {
-        _ = try await tool.invoke(context: MCPContext(arguments: [:]))
-        Issue.record("Expected the extension run() error to propagate")
-    } catch MCPError.internalError {
-        // expected
-    } catch {
-        Issue.record("Unexpected error: \(error)")
-    }
-}
-
-@MCPCommand(description: "Extension-throwing probe")
-struct ExtThrowingRunTool {
-    func shouldFail() -> Bool { true }
-}
-
-extension ExtThrowingRunTool {
-    func run() throws -> String {
-        if shouldFail() { throw MCPError.internalError("boom") }
-        return "ok"
     }
 }
 

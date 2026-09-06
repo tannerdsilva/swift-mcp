@@ -1,4 +1,4 @@
-# ``MCP``
+# `MCP`
 
 Build MCP (Model Context Protocol) servers in Swift with a declarative,
 macro-driven API.
@@ -7,13 +7,13 @@ macro-driven API.
 
 swift-mcp is a Swift framework for building MCP servers. It provides:
 
-- **Macro-based tool definition**: use ``MCPCommand`` or ``FuncTool`` to define
+- **Macro-based tool definition**: use `MCPCommand` or `FuncTool` to define
   tools with `@Argument`, `@Option`, `@Flag`, and `@OptionGroup` wrappers.
 - **Swift Service Lifecycle integration**: ``MCPServer`` conforms to the
   `Service` protocol. The only way to launch a server is through a
-  ``ServiceGroup``.
+  `ServiceGroup`.
 - **Compile-time guarantees**: parameters are discovered and argument
-  injection is generated at compile time; the ``MCPApplication`` macro
+  injection is generated at compile time; the `MCPApplication` macro
   generates an exhaustive, type-preserving dispatch through a `ToolID` enum.
 - **Transport abstraction**: built-in ``StdioTransport`` and ``TCPTransport``
   with IPv4, IPv6, dual-stack, and Unix domain socket support.
@@ -34,14 +34,6 @@ swift-mcp is a Swift framework for building MCP servers. It provides:
 ### Macros
 
 - <doc:MacroGuide>
-- ``MCPCommand``
-- ``MCPApplication``
-- ``FuncTool``
-- ``MCPOptionGroup``
-- ``Argument``
-- ``Option``
-- ``Flag``
-- ``OptionGroup``
 
 ### Core Protocols
 
@@ -102,7 +94,7 @@ swift-mcp is a Swift framework for building MCP servers. It provides:
 - ``StaticMCPGroup``
 - ``ToolAvailability``
 - ``Tool``
-
-### JSON Schema
-
-- ``JSONSchemaBuilder``
+- ``Argument``
+- ``Option``
+- ``Flag``
+- ``OptionGroup``

@@ -13,11 +13,11 @@
 ///
 /// This enum classifies parameters into three categories:
 ///
-/// - ``argument``: A required named parameter. The caller must provide a
+/// - `argument`: A required named parameter. The caller must provide a
 ///   value. Maps to the ``Argument`` wrapper.
-/// - ``option``: An optional parameter with a default value. The caller can
+/// - `option`: An optional parameter with a default value. The caller can
 ///   omit it. Maps to the ``Option`` wrapper.
-/// - ``flag``: A boolean flag that defaults to `false`. Maps to the ``Flag``
+/// - `flag`: A boolean flag that defaults to `false`. Maps to the ``Flag``
 ///   wrapper.
 public enum MCPParamKind: String, Sendable, Equatable, Codable {
     /// A required positional/named parameter.
@@ -64,7 +64,7 @@ public struct MCPParameterInfo: Sendable, Equatable, Codable {
 
     /// The Swift type name (e.g. "String", "Int").
     ///
-    /// This is used by ``JSONSchemaBuilder`` to map Swift types to JSON Schema
+    /// This is used by `JSONSchemaBuilder` to map Swift types to JSON Schema
     /// types for the `inputSchema` field.
     public let typeName: String
 
@@ -114,12 +114,12 @@ public struct MCPParameterInfo: Sendable, Equatable, Codable {
 
 /// Protocol that individual parameter property wrappers conform to.
 ///
-/// ``MCPParamProtocol`` defines the runtime accessor the framework uses to
+/// `MCPParamProtocol` defines the runtime accessor the framework uses to
 /// inject argument values into a property wrapper. All wrappers (`@Argument`,
 /// `@Option`, `@Flag`) conform as value types.
 ///
-/// Parameter metadata is emitted at compile time by the ``MCPCommand`` and
-/// ``MCPOptionGroup`` macros via ``MCPTool/discoverParameters()``, so the
+/// Parameter metadata is emitted at compile time by the `MCPCommand` and
+/// `MCPOptionGroup` macros via ``MCPTool/discoverParameters()``, so the
 /// wrappers carry no descriptive state — only the value.
 protocol MCPParamProtocol: Sendable {
     /// Set the wrapped value from an untyped JSON-decoded value.
@@ -134,7 +134,7 @@ protocol MCPParamProtocol: Sendable {
 
 /// A protocol for compile-time unique tool identifiers.
 ///
-/// Conforming types must be `String`-backed enums. The ``MCPApplication``
+/// Conforming types must be `String`-backed enums. The `MCPApplication`
 /// macro generates a ``MCPToolID``-conforming enum with one case per
 /// ``Tool`` property, providing compile-time unique tool names and
 /// exhaustive dispatch.
@@ -228,7 +228,7 @@ public struct MCPCallerInfo: Sendable {
 
 /// Protocol for macro-generated option-group metadata.
 ///
-/// Conforming types are option-group structs annotated with ``MCPOptionGroup``.
+/// Conforming types are option-group structs annotated with `MCPOptionGroup`.
 /// The macro synthesizes static parameter metadata and an argument-apply
 /// method so the parent ``MCPTool`` conformance can flatten groups at compile
 /// time without reflection.

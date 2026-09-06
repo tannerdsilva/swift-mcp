@@ -110,7 +110,7 @@ public enum MCPContent: Sendable, Codable {
 ///
 /// ``MCPToolResult`` encapsulates the output of an MCP tool call. It contains
 /// an array of ``MCPContent`` blocks and an error flag. Use the static factory
-/// methods ``text(_:)`` and ``error(_:)`` for common cases.
+/// methods `text(_:)` and `error(_:)` for common cases.
 ///
 /// ```swift
 /// // Return a successful text result
@@ -176,17 +176,17 @@ public struct MCPToolResult: Sendable, Codable {
 /// Swift-native replacement for Foundation's `NSNull`: a `null` JSON value is
 /// represented as an instance of this value type, so JSON null round-trips
 /// without any Foundation symbol in the encoding core. Values that reach
-/// `AnyCodable` as `null` (e.g. `{"key": null}`) decode to a `JSONNull` and
+/// ``AnyCodable`` as `null` (e.g. `{"key": null}`) decode to a `JSONNull` and
 /// encode back as JSON `null`.
 struct JSONNull: Sendable, Hashable {}
 
-/// A type-erased ``Codable`` value for use in structured content.
+/// A type-erased `Codable` value for use in structured content.
 ///
-/// ``AnyCodable`` wraps an arbitrary `Any` value and provides ``Codable``
-/// conformance by attempting to encode/decode known types (``String``, ``Int``,
-/// ``Double``, ``Bool``, arrays, and dictionaries). Unknown types are encoded
+/// ``AnyCodable`` wraps an arbitrary `Any` value and provides `Codable`
+/// conformance by attempting to encode/decode known types (`String`, `Int`,
+/// `Double`, `Bool`, arrays, and dictionaries). Unknown types are encoded
 /// as their string description. JSON `null` is represented by the internal
-/// ``JSONNull`` marker type.
+/// `JSONNull` marker type.
 ///
 /// This is used internally by the framework for JSON-RPC message serialization
 /// where the exact types are not known at compile time.
@@ -204,8 +204,8 @@ public struct AnyCodable: Codable, @unchecked Sendable {
 
     /// Encodes the wrapped value to the given encoder.
     ///
-    /// Attempts to encode known types in order: ``String``, ``Int``, ``Double``,
-    /// ``Bool``, `[String: Any]`, `[Any]`. Falls back to `String(describing:)`.
+    /// Attempts to encode known types in order: `String`, `Int`, `Double`,
+    /// `Bool`, `[String: Any]`, `[Any]`. Falls back to `String(describing:)`.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.singleValueContainer()
         switch value {
@@ -223,9 +223,9 @@ public struct AnyCodable: Codable, @unchecked Sendable {
 
     /// Decodes a value from the given decoder.
     ///
-    /// Attempts to decode known types in order: ``String``, ``Int``, ``Double``,
-    /// ``Bool``, `[String: AnyCodable]`, `[AnyCodable]`. JSON `null` decodes to
-    /// a ``JSONNull`` marker. Falls back to encoding the raw description as a
+    /// Attempts to decode known types in order: `String`, `Int`, `Double`,
+    /// `Bool`, `[String: AnyCodable]`, `[AnyCodable]`. JSON `null` decodes to
+    /// a `JSONNull` marker. Falls back to encoding the raw description as a
     /// string to avoid silent data loss.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()

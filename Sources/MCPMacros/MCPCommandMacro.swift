@@ -243,11 +243,12 @@ public struct MCPCommandMacro: ExtensionMacro {
         // Only emit `try`/`await` when the user's run() is actually throwing or
         // async — an unconditional prefix generates warnings for every
         // non-throwing run() (the sync and async non-throwing cases). The
-        // extension fallback always carries `try` (an unknowable extension
-        // run() may throw); this restores pre-F5 compatibility for
-        // throwing extension run() methods at the cost of a benign `try`
-        // warning when the extension is non-throwing.
-        let tryPrefix = (runSignature.isThrowing || runSignature.isExtensionFallback) ? "try " : ""
+        // extension fallback can't be introspected (an extension run() may live
+        // in another file), so it never carries `try`; the compiler enforces
+        // the match — a throwing extension run() surfaces as a missing-`try`
+        // error at the generated call site, and a non-throwing one stays
+        // warning-free.
+        let tryPrefix = runSignature.isThrowing ? "try " : ""
         let awaitPrefix = runSignature.isAsync ? "await " : ""
         let invokeCall = "\(tryPrefix)\(awaitPrefix)run()"
 

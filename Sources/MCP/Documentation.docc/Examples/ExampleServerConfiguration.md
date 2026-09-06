@@ -336,7 +336,7 @@ try await group.run()
 
 ## Custom Transport
 
-Implement the `MCPTransport` protocol for custom communication channels:
+Implement the ``MCPTransport`` protocol for custom communication channels:
 
 ```swift
 import MCP

@@ -42,7 +42,7 @@ let server = MCPServer(
 )
 ```
 
-`ServerAddress` supports IPv4, IPv6, dual-stack, and Unix domain sockets — see
+``ServerAddress`` supports IPv4, IPv6, dual-stack, and Unix domain sockets — see
 <doc:TransportDesign>.
 
 ### TCP Transport with Custom Access Resolver
@@ -132,7 +132,7 @@ struct MyApp {
 ## Running the Server
 
 The server conforms to the `Service` protocol and must be run via a
-``ServiceGroup``.
+`ServiceGroup`.
 
 ```swift
 // Simple (recommended): signal-based graceful shutdown on SIGTERM/SIGINT

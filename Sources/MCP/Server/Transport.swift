@@ -40,7 +40,7 @@ public protocol MCPTransport: Sendable {
 
     /// Stop the transport.
     ///
-    /// This method should cause ``start(handler:)`` to return. After calling
+    /// This method should cause `start(handler:)` to return. After calling
     /// `stop()`, the transport should no longer invoke the handler.
     func stop() async throws
 }
@@ -113,11 +113,11 @@ actor TransportMessageHandler {
 /// followed by a newline.
 ///
 /// The read loop is poll-based with a short timeout, so it is interruptible:
-/// ``stop()``-initiated shutdown is observed within one poll interval, and a
+/// `stop()`-initiated shutdown is observed within one poll interval, and a
 /// clean client EOF ends the read loop gracefully instead of trapping.
 ///
-/// - Warning: This class uses ``@unchecked Sendable`` because the `isRunning`
-///   flag is mutated from the read loop and from ``stop()``. These are called
+/// - Warning: This class uses `@unchecked Sendable` because the `isRunning`
+///   flag is mutated from the read loop and from `stop()`. These are called
 ///   from different tasks but the flag is only written with simple non-
 ///   conflicting access patterns. The `messageHandler` actor provides
 ///   serialized access to message processing.
@@ -144,7 +144,7 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
     ///   - logger: An optional logger for transport-level diagnostics.
     ///   - maxMessageSize: The maximum size in bytes of a single
     ///     newline-delimited JSON-RPC message. Defaults to
-    ///     ``defaultMaxMessageSize``.
+    ///     `defaultMaxMessageSize`.
     public init(logger: Logger? = nil, maxMessageSize: Int = StdioTransport.defaultMaxMessageSize) {
         self.logger = logger
         self.maxMessageSize = maxMessageSize
@@ -169,7 +169,7 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
     /// This method reads newline-delimited JSON from stdin using an internal
     /// buffer. For each complete message, it dispatches to the message handler
     /// actor for serialized processing. The loop exits when stdin reaches EOF,
-    /// raises a poll/read error, or ``stop()`` is called.
+    /// raises a poll/read error, or `stop()` is called.
     ///
     /// - Parameter handler: The message handler to invoke for incoming requests.
     public func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
@@ -287,7 +287,7 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
     /// Stops the transport.
     ///
     /// Sets the running flag to `false`, which causes the poll-based read loop
-    /// in ``start(handler:)`` to exit within one poll interval.
+    /// in `start(handler:)` to exit within one poll interval.
     public func stop() async throws {
         isRunning = false
         await messageHandler?.cancel()

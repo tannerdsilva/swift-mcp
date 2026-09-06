@@ -10,7 +10,7 @@ formatting, logging verbosity, or connection settings.
 
 ## Defining an Option Group
 
-Annotate a struct with ``@MCPOptionGroup`` and give it parameter wrappers:
+Annotate a struct with `@MCPOptionGroup` and give it parameter wrappers:
 
 ```swift
 @MCPOptionGroup
@@ -26,13 +26,13 @@ struct PrintOptions {
 }
 ```
 
-``@MCPOptionGroup`` synthesizes a ``StaticMCPGroup`` conformance — static
+`@MCPOptionGroup` synthesizes a ``StaticMCPGroup`` conformance — static
 `mcpParameters` metadata plus `mcpApply(arguments:)` — so the group's
 parameters can be flattened into a parent tool at compile time.
 
 ## Using an Option Group
 
-Use ``@OptionGroup`` in your tool:
+Use `@OptionGroup` in your tool:
 
 ```swift
 @MCPCommand(description: "Print a message")
@@ -72,10 +72,10 @@ struct Print: MCPTool {
 
 ## How It Works
 
-When ``MCPCommand`` processes a tool with an ``@OptionGroup`` property:
+When `MCPCommand` processes a tool with an `@OptionGroup` property:
 
 1. **Discovery**: the macro inlines the group's static metadata
-   (`StaticMCPGroup/mcpParameters`) into the tool's `discoverParameters()`, so
+   (``StaticMCPGroup/mcpParameters``) into the tool's `discoverParameters()`, so
    the JSON Schema includes all group parameters as if they were declared on
    the tool.
 2. **Argument injection**: the generated `apply(arguments:)` forwards to the
@@ -84,7 +84,7 @@ When ``MCPCommand`` processes a tool with an ``@OptionGroup`` property:
 
 ## Nested Option Groups
 
-Groups are shallow: an ``@MCPOptionGroup`` struct should contain only
+Groups are shallow: an `@MCPOptionGroup` struct should contain only
 `@Argument` / `@Option` / `@Flag` properties. Nested `@OptionGroup` properties
 are rejected with a compiler diagnostic.
 

@@ -78,8 +78,8 @@
 /// }
 /// ```
 ///
-/// The generated `MCPTool` conformance allows the struct to be registered
-/// directly with an `MCPServer`:
+/// The generated ``MCPTool`` conformance allows the struct to be registered
+/// directly with an ``MCPServer``:
 /// ```swift
 /// let server = MCPServer(name: "demo", version: "1.0") {
 ///     Greet()
@@ -110,12 +110,12 @@ public macro MCPCommand(
 /// ```
 ///
 /// The macro generates a ``StaticMCPGroup`` conformance with static parameter
-/// metadata and an `mcpApply(arguments:)` method, so the parent ``MCPCommand``
+/// metadata and an `mcpApply(arguments:)` method, so the parent `MCPCommand`
 /// conformance can flatten group parameters at compile time without reflection.
 @attached(extension, conformances: StaticMCPGroup, names: named(mcpParameters), named(mcpApply))
 public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOptionGroupMacro")
 
-/// A macro that generates a typed `MCPToolDispatcher`, a `ToolID` enum, and
+/// A macro that generates a typed ``MCPToolDispatcher``, a `ToolID` enum, and
 /// exhaustive dispatch for an MCP server application.
 ///
 /// Apply this macro to a struct whose properties are marked with ``Tool``.
@@ -130,7 +130,7 @@ public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOp
 ///    `toolCatalog(for:)` — so the server serves `tools/list` and
 ///    `tools/call` through typed dispatch with no runtime type erasure.
 /// 4. A `static func main()` that creates an ``MCPServer`` with the app as
-///    its dispatcher and runs it via ``MCPServer/runService()``.
+///    its dispatcher and runs it via `MCPServer/runService()`.
 ///
 /// ## Basic Usage
 ///
@@ -218,7 +218,7 @@ public macro MCPApplication(
 ///
 /// - Parameters **without** default values → ``Argument`` (required)
 /// - Parameters **with** default values → ``Option`` (optional)
-/// - ``Bool`` parameters with default `false` → ``Flag``
+/// - `Bool` parameters with default `false` → ``Flag``
 ///
 /// The generated struct is named `{FunctionName}Tool` and can be registered
 /// with an ``MCPServer``.
@@ -240,7 +240,7 @@ public macro MCPApplication(
 ///
 /// ## Scope constraint
 ///
-/// ``FuncTool`` is a *peer* macro that introduces a new type at its attachment
+/// `FuncTool` is a *peer* macro that introduces a new type at its attachment
 /// scope. Because the compiler does not allow peer macros to introduce arbitrary
 /// names at global scope, the annotated function must be a member of a type —
 /// and because the generated `run()` calls it unqualified, it must be `static`
@@ -257,7 +257,7 @@ public macro MCPApplication(
 /// ## Parameter descriptions
 ///
 /// Parameter descriptions are read from the function's `///` doc comment and
-/// surfaced in the tool's JSON Schema — see the ``FuncTool`` macro
+/// surfaced in the tool's JSON Schema — see the `FuncTool` macro
 /// documentation for the supported spellings.
 ///
 /// ## Parameter constraints

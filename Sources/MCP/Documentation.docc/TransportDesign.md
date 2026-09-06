@@ -18,17 +18,17 @@ public protocol MCPTransport: Sendable {
 }
 ```
 
-- **start**: Begins processing messages. The handler receives raw JSON-RPC data and caller information, and returns optional response data. Return ``nil`` for notifications.
-- **stop**: Causes ``start`` to return. After calling ``stop``, the transport should no longer invoke the handler.
+- **start**: Begins processing messages. The handler receives raw JSON-RPC data and caller information, and returns optional response data. Return `nil` for notifications.
+- **stop**: Causes `start` to return. After calling `stop`, the transport should no longer invoke the handler.
 
 ## Built-in Transports
 
 ### StdioTransport
 
-Reads newline-delimited JSON from stdin and writes to stdout. The caller is always ``.root`` with source address ``"stdio"``. This is the default transport and is suitable for CLI-based MCP servers launched as subprocesses.
+Reads newline-delimited JSON from stdin and writes to stdout. The caller is always `.root` with source address `"stdio"`. This is the default transport and is suitable for CLI-based MCP servers launched as subprocesses.
 
 The read loop is poll-based with a short (250 ms) bounded timeout, so
-``stop()``-initiated shutdown is prompt even while the peer is silent, and a
+`stop()`-initiated shutdown is prompt even while the peer is silent, and a
 clean client EOF ends the loop gracefully — the server completes instead of
 crashing.
 
@@ -49,7 +49,7 @@ let transport = TCPTransport(
 )
 ```
 
-The ``TCPTransport`` accepts an ``accessResolver`` closure that maps source
+The ``TCPTransport`` accepts an `accessResolver` closure that maps source
 addresses to ``AccessLevel`` values. This is resolved once per connection and
 stamped on every message from that connection.
 
@@ -71,7 +71,7 @@ stamped on every message from that connection.
 
 #### Dual-Stack Support
 
-On Darwin (macOS), binding to ``::`` automatically accepts IPv4 connections via IPv4-mapped IPv6 addresses. On Linux, set ``allowIPv4MappedIPv6: true`` to disable ``IPV6_V6ONLY``.
+On Darwin (macOS), binding to `::` automatically accepts IPv4 connections via IPv4-mapped IPv6 addresses. On Linux, set `allowIPv4MappedIPv6: true` to disable `IPV6_V6ONLY`.
 
 ## Caller Information
 
@@ -99,7 +99,7 @@ struct WebSocketTransport: MCPTransport {
 
 ## Message Format
 
-All transports use newline-delimited JSON. Each message is a complete JSON-RPC 2.0 object on a single line, terminated by ``0x0A`` (newline).
+All transports use newline-delimited JSON. Each message is a complete JSON-RPC 2.0 object on a single line, terminated by `0x0A` (newline).
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"tools/list"}
