@@ -11,7 +11,7 @@ The ``MCPTransport`` protocol abstracts the communication channel between the MC
 ```swift
 public protocol MCPTransport: Sendable {
     func start(
-        handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?
+        handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?
     ) async throws
 
     func stop() async throws
@@ -87,7 +87,7 @@ Implement ``MCPTransport`` for any communication channel:
 
 ```swift
 struct WebSocketTransport: MCPTransport {
-    func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
+    func start(handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?) async throws {
         // Connect to WebSocket, read messages, call handler, write responses
     }
 

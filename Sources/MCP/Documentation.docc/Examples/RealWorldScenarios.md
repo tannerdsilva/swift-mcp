@@ -232,9 +232,7 @@ struct Query {
 
     func run() async throws -> String {
         let results = try await dbPool.query(sql)
-        let jsonData = try JSONSerialization.data(
-            withJSONObject: results, options: .prettyPrinted
-        )
+        let jsonData = try QuickJSON.encode(AnyCodable(results), flags: .pretty)
         return String(decoding: jsonData, as: UTF8.self)
     }
 }
@@ -844,9 +842,37 @@ actor ConfigStore {
         load()
     }
 
+    /// Reads a file into raw bytes without Foundation (fread loop).
+    private func readFile(_ path: String) -> [UInt8]? {
+        guard let file = fopen(path, "rb") else { return nil }
+        defer { fclose(file) }
+        var bytes: [UInt8] = []
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = chunk.withUnsafeMutableBytes { fread($0.baseAddress, 1, chunk.count, file) }
+            if n <= 0 { break }
+            bytes.append(contentsOf: chunk[0..<Int(n)])
+        }
+        return bytes
+    }
+
+    /// Writes raw bytes to a file without Foundation (fwrite loop).
+    private func writeFile(_ path: String, _ bytes: [UInt8]) throws {
+        guard let file = fopen(path, "wb") else {
+            throw MCPError.internalError("Unable to open config for writing: \(path)")
+        }
+        defer { fclose(file) }
+        var offset = 0
+        while offset < bytes.count {
+            let n = bytes.withUnsafeBytes { fwrite($0.baseAddress?.advanced(by: offset), 1, bytes.count - offset, file) }
+            if n == 0 { throw MCPError.internalError("Config write failed") }
+            offset += Int(n)
+        }
+    }
+
     func load() {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let bytes = readFile(filePath),
+              let json = (try? QuickJSON.decode(AnyCodable.self, from: bytes))?.value as? [String: Any] else {
             config = [:]
             return
         }
@@ -854,8 +880,8 @@ actor ConfigStore {
     }
 
     func save() throws {
-        let data = try JSONSerialization.data(withJSONObject: config, options: .prettyPrinted)
-        try data.write(to: URL(fileURLWithPath: filePath))
+        let data = try QuickJSON.encode(AnyCodable(config), flags: .pretty)
+        try writeFile(filePath, data)
     }
 
     func get(_ key: String) -> Any? { config[key] }
@@ -890,9 +916,9 @@ struct ConfigSet {
     var value: String = ""
 
     func run() async throws -> String {
-        let parsedValue = try JSONSerialization.jsonObject(
-            with: value.data(using: .utf8)!
-        )
+        guard let parsedValue = (try? QuickJSON.decode(AnyCodable.self, from: Array(value.utf8)))?.value else {
+            throw MCPError.internalError("Invalid JSON: \(value)")
+        }
         await configStore.set(key, value: parsedValue)
         try await configStore.save()
         return "Set \(key) = \(value)"
@@ -922,7 +948,9 @@ struct ConfigValidate {
         var errors: [String] = []
 
         for (key, value) in all {
-            if value is NSNull {
+            // JSON null round-trips as MCP's internal null marker; detect it by
+            // re-encoding through AnyCodable rather than naming the sentinel.
+            if let encoded = try? QuickJSON.encode(AnyCodable(value)), encoded == Array("null".utf8) {
                 errors.append("\(key) is null")
             }
         }
@@ -947,7 +975,7 @@ struct ConfigReload {
 struct ConfigExport {
     func run() async throws -> String {
         let all = await configStore.all()
-        let data = try JSONSerialization.data(withJSONObject: all, options: .prettyPrinted)
+        let data = try QuickJSON.encode(AnyCodable(all), flags: .pretty)
         return String(decoding: data, as: UTF8.self)
     }
 }

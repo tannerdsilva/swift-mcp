@@ -13,6 +13,7 @@ import Foundation
 import Logging
 import NIOCore
 import NIOPosix
+import QuickJSON
 import Synchronization
 
 // MARK: - Channel Handler
@@ -26,7 +27,7 @@ import Synchronization
 final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = ByteBuffer
 
-    private let handler: @Sendable (Data, MCPCallerInfo) async throws -> Data?
+    private let handler: @Sendable ([UInt8], MCPCallerInfo) async throws -> [UInt8]?
     private let caller: MCPCallerInfo
     private let logger: Logger?
     private let maxMessageSize: Int
@@ -34,7 +35,7 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
     private var actor: TransportMessageHandler?
 
     init(
-        handler: @escaping @Sendable (Data, MCPCallerInfo) async throws -> Data?,
+        handler: @escaping @Sendable ([UInt8], MCPCallerInfo) async throws -> [UInt8]?,
         caller: MCPCallerInfo,
         logger: Logger? = nil,
         maxMessageSize: Int
@@ -53,14 +54,14 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
         self.actor = TransportMessageHandler(
             handler: handler,
             caller: caller,
-            write: { data in
-                var buf = channel.allocator.buffer(capacity: data.count + 1)
-                buf.writeBytes(data)
+            write: { bytes in
+                var buf = channel.allocator.buffer(capacity: bytes.count + 1)
+                buf.writeBytes(bytes)
                 buf.writeInteger(UInt8(0x0A)) // newline
                 channel.writeAndFlush(buf, promise: nil)
             },
-            makeError: { requestData, error in
-                guard let request = try? JSONDecoder().decode(JSONRPCRequest.self, from: requestData) else {
+            makeError: { requestBytes, error in
+                guard let request = try? QuickJSON.decode(JSONRPCRequest.self, from: requestBytes) else {
                     // Without an id there is no frame to reply to.
                     return nil
                 }
@@ -68,9 +69,9 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
                     let response = JSONRPCErrorResponse(
                         id: request.id,
                         code: -32603,
-                        message: "Internal error: \(error.localizedDescription)"
+                        message: "Internal error: \(readableErrorDescription(error))"
                     )
-                    return try JSONEncoder().encode(response)
+                    return try QuickJSON.encode(response)
                 } catch {
                     // A fixed-shape error frame cannot realistically fail to encode.
                     logger?.warning("Failed to encode TCP error response: \(error)")
@@ -106,9 +107,8 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
             // Skip the newline bytes
             inboundData.moveReaderIndex(forwardBy: 1)
 
-            let data = Data(lineData)
             // Dispatch to the actor for serialized processing
-            Task { await actor.process(data) }
+            Task { await actor.process(lineData) }
         }
 
         // A leftover partial frame larger than the cap is a single unbounded
@@ -116,7 +116,7 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
         // without bound.
         if inboundData.readableBytes > maxMessageSize {
             logger?.warning("TCP message exceeds maximum size (\(maxMessageSize) bytes); closing connection")
-            if let errorData = try? JSONEncoder().encode(
+            if let errorData = try? QuickJSON.encode(
                 JSONRPCErrorResponse(id: .null, code: -32700, message: "Message too large")
             ) {
                 var out = context.channel.allocator.buffer(capacity: errorData.count + 1)
@@ -272,9 +272,9 @@ public final class TCPTransport: MCPTransport, MCPTransportAddressProviding, @un
     /// Starts the transport and begins listening for connections.
     ///
     /// - Parameter handler: The message handler to invoke for incoming requests.
-    ///   The handler receives raw JSON-RPC data and caller information, and
-    ///   returns optional response data.
-    public func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
+    ///   The handler receives raw JSON-RPC bytes and caller information, and
+    ///   returns optional response bytes.
+    public func start(handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?) async throws {
         stateLock.withLock { _ in
             isRunning = true
         }

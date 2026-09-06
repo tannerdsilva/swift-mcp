@@ -347,7 +347,7 @@ struct WebSocketTransport: MCPTransport {
     let url: URL
 
     func start(
-        handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?
+        handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?
     ) async throws {
         // WebSocket connection logic
         // On message: call handler(data, callerInfo)

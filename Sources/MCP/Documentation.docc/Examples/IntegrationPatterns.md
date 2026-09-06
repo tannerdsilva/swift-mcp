@@ -168,14 +168,13 @@ struct Main {
 
 ```swift
 import Foundation
+import QuickJSON
 
 /// A minimal MCP client for testing
 final class MCPClient {
     let host: String
     let port: Int
     private var nextId = 1
-    private let encoder = JSONEncoder()
-    private let decoder = JSONDecoder()
 
     init(host: String = "127.0.0.1", port: Int = 8080) {
         self.host = host
@@ -196,9 +195,9 @@ final class MCPClient {
             request["params"] = params
         }
 
-        let data = try JSONSerialization.data(withJSONObject: request)
+        let data = try QuickJSON.encode(AnyCodable(request))
         let responseData = try await sendData(data)
-        return try JSONSerialization.jsonObject(with: responseData) as? [String: Any] ?? [:]
+        return (try? QuickJSON.decode(AnyCodable.self, from: responseData))?.value as? [String: Any] ?? [:]
     }
 
     /// Initialize the connection
@@ -224,10 +223,12 @@ final class MCPClient {
         return response["result"] as? [String: Any] ?? [:]
     }
 
-    /// Send raw data over TCP
-    private func sendData(_ data: Data) async throws -> Data {
+    /// Send raw bytes over TCP (newline-delimited framing)
+    private func sendData(_ data: [UInt8]) async throws -> [UInt8] {
         let socket = try await SocketConnection(host: host, port: port)
-        try await socket.send(data + "\n".data(using: .utf8)!)
+        var payload = data
+        payload.append(0x0A) // newline terminator
+        try await socket.send(payload)
         return try await socket.receive()
     }
 }
@@ -344,12 +345,12 @@ import MCP
 
 /// A mock transport for testing
 final class MockTransport: MCPTransport, @unchecked Sendable {
-    var messages: [Data] = []
-    var responses: [Data] = []
+    var messages: [[UInt8]] = []
+    var responses: [[UInt8]] = []
     var onStart: (@Sendable () async throws -> Void)?
 
     func start(
-        handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?
+        handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?
     ) async throws {
         try await onStart?()
         for message in messages {
@@ -369,13 +370,13 @@ final class MockTransport: MCPTransport, @unchecked Sendable {
 func testServerToolsList() async throws {
     let transport = MockTransport()
     transport.messages = [
-        try JSONSerialization.data(withJSONObject: [
+        try QuickJSON.encode(AnyCodable([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "test"]]
-        ]),
-        try JSONSerialization.data(withJSONObject: [
+        ])),
+        try QuickJSON.encode(AnyCodable([
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": [:]
-        ])
+        ]))
     ]
 
     let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) {
@@ -385,7 +386,7 @@ func testServerToolsList() async throws {
     try await server.run()
 
     #expect(transport.responses.count == 2)
-    let listResponse = try JSONSerialization.jsonObject(with: transport.responses[1]) as? [String: Any]
+    let listResponse = (try? QuickJSON.decode(AnyCodable.self, from: transport.responses[1]))?.value as? [String: Any]
     let result = listResponse?["result"] as? [String: Any]
     let tools = result?["tools"] as? [[String: Any]]
     #expect(tools?.count == 1)

@@ -35,6 +35,11 @@ let package = Package(
             url: "https://github.com/apple/swift-docc-plugin.git",
             from: "1.0.0"
         ),
+        // QuickJSON v2 — Foundation-free JSON codec (yyjson-backed).
+        .package(
+            url: "https://github.com/tannerdsilva/QuickJSON.git",
+            from: "2.0.0"
+        ),
     ],
     targets: [
         // --- Main MCP library ---
@@ -48,6 +53,7 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+                .product(name: "QuickJSON", package: "QuickJSON"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
@@ -71,7 +77,11 @@ let package = Package(
         // --- Unit tests ---
         .testTarget(
             name: "MCPTests",
-            dependencies: ["MCP", "MCPMacros"],
+            dependencies: [
+                "MCP",
+                "MCPMacros",
+                .product(name: "QuickJSON", package: "QuickJSON"),
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]

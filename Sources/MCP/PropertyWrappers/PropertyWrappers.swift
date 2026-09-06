@@ -9,7 +9,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-import Foundation
+import QuickJSON
 
 // MARK: - @Argument
 
@@ -356,17 +356,34 @@ private func floatingPointWholeCoercion<I: BinaryInteger & FixedWidthInteger>(_ 
 /// The typed JSON-RPC decode path materializes JSON as plain Swift values
 /// (`String`/`Int`/`Double`/`Bool`/`JSONNull` and trees of them), so custom
 /// `Codable & Sendable` parameter types — enums, structs, optionals — are
-/// decoded by round-tripping that tree through `JSONEncoder`/`JSONDecoder`.
+/// decoded by round-tripping that tree through QuickJSON's Codable stack.
 private func decodeCodableValue<Value: Decodable>(_ value: Any, as type: Value.Type) -> Value? {
-    // The null marker cannot be serialized by JSONSerialization (only
-    // Foundation's NSNull can), so route it straight to JSON `null`: decoding
-    // `null` succeeds for Optional<W> parameters (setting nil) and fails for
-    // non-optional ones (yielding a type mismatch).
-    if value is JSONNull {
-        return try? JSONDecoder().decode(type, from: Data("null".utf8))
+    // QuickJSON v2's integer decode returns 0 for a real-number JSON value
+    // instead of throwing (yyjson_get_sint returns 0 for reals). Emulate the
+    // strict behavior Foundation's JSONDecoder had: a non-integral number
+    // must not satisfy an integer parameter, or 3.5 would silently become 0.
+    if Value.self is any BinaryInteger.Type, containsNonIntegralNumber(value) {
+        return nil
     }
-    // `.fragmentsAllowed` so bare scalars (e.g. a String for an enum-typed or
-    // Optional<Scalar> parameter) serialize as fragments, not just dictionaries.
-    guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]) else { return nil }
-    return try? JSONDecoder().decode(type, from: data)
+    // Route the value tree through `AnyCodable`: a `JSONNull` marker encodes
+    // as JSON `null` (succeeding for Optional<W> parameters, failing for
+    // non-optional ones), and bare scalars serialize as JSON fragments, not
+    // just dictionaries.
+    guard let encoded = try? QuickJSON.encode(AnyCodable(value)) else { return nil }
+    return try? QuickJSON.decode(type, from: encoded)
+}
+
+/// True when the JSON-compatible value tree contains a non-integral number
+/// anywhere (`3.5`, `-0.25`, infinity).
+private func containsNonIntegralNumber(_ value: Any) -> Bool {
+    if let double = value as? Double {
+        return !double.isFinite || double.rounded() != double
+    }
+    if let array = value as? [Any] {
+        return array.contains(where: containsNonIntegralNumber)
+    }
+    if let dict = value as? [String: Any] {
+        return dict.values.contains(where: containsNonIntegralNumber)
+    }
+    return false
 }

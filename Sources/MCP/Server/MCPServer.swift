@@ -12,6 +12,7 @@
 import Foundation
 import Logging
 import NIOCore
+import QuickJSON
 import ServiceLifecycle
 import Synchronization
 import UnixSignals
@@ -426,9 +427,9 @@ public final class MCPServer: Service, @unchecked Sendable {
         _logger.info("Starting MCP server: \(name) v\(version)")
 
         try await withGracefulShutdownHandler {
-            try await self.transport.start { [weak self] (data: Data, caller: MCPCallerInfo) in
-                guard let self else { return nil as Data? }
-                return try await self.handleMessage(data, caller: caller)
+            try await self.transport.start { [weak self] (bytes: [UInt8], caller: MCPCallerInfo) in
+                guard let self else { return nil as [UInt8]? }
+                return try await self.handleMessage(bytes, caller: caller)
             }
         } onGracefulShutdown: {
             // The shutdown callback is synchronous, so a short-lived task fans
@@ -482,35 +483,35 @@ public final class MCPServer: Service, @unchecked Sendable {
     /// Routes an incoming JSON-RPC message to the appropriate handler.
     ///
     /// - Parameters:
-    ///   - data: The raw JSON-RPC message data.
+    ///   - bytes: The raw JSON-RPC message bytes.
     ///   - caller: Information about the caller.
-    /// - Returns: Response data, or `nil` for notifications.
-    private func handleMessage(_ data: Data, caller: MCPCallerInfo) async throws -> Data? {
+    /// - Returns: Response bytes, or `nil` for notifications.
+    private func handleMessage(_ bytes: [UInt8], caller: MCPCallerInfo) async throws -> [UInt8]? {
         // JSON-RPC batch: a top-level array of requests. Each element is
         // routed like a single message and the non-nil responses are returned
         // as one JSON array in request order. An empty batch is an Invalid
         // Request; a batch whose elements are all notifications gets no
         // response, matching the single-message rules.
-        if firstNonWhitespaceByte(of: data) == 0x5B {  // '['
-            guard let elements = try? JSONDecoder().decode([AnyCodable].self, from: data), !elements.isEmpty else {
-                _logger.warning("Invalid JSON-RPC batch in: \(String(decoding: data, as: UTF8.self))")
+        if firstNonWhitespaceByte(of: bytes) == 0x5B {  // '['
+            guard let elements = try? QuickJSON.decode([AnyCodable].self, from: bytes), !elements.isEmpty else {
+                _logger.warning("Invalid JSON-RPC batch in: \(String(decoding: bytes, as: UTF8.self))")
                 return makeErrorResponse(id: .null, code: -32600, message: "Invalid Request")
             }
 
-            var responses: [Data] = []
+            var responses: [[UInt8]] = []
             for element in elements {
-                guard let elementData = try? JSONEncoder().encode(element) else { continue }
-                if let response = try await handleMessage(elementData, caller: caller) {
+                guard let elementBytes = try? QuickJSON.encode(element) else { continue }
+                if let response = try await handleMessage(elementBytes, caller: caller) {
                     responses.append(response)
                 }
             }
 
             guard !responses.isEmpty else { return nil }
 
-            var batch = Data("[".utf8)
+            var batch: [UInt8] = Array("[".utf8)
             for (index, object) in responses.enumerated() {
                 if index > 0 { batch.append(0x2C) }  // ','
-                batch.append(object)
+                batch.append(contentsOf: object)
             }
             batch.append(0x5D)  // ']'
             return batch
@@ -529,7 +530,7 @@ public final class MCPServer: Service, @unchecked Sendable {
         // JSON-RPC 2.0 requires ids to be a String, Number, or NULL and answers
         // every request. Null ids are discouraged (they collide with the
         // unknown-id error convention) but permitted, so we echo `id: null`.
-        let envelope = try? JSONDecoder().decode([String: AnyCodable].self, from: data)
+        let envelope = try? QuickJSON.decode([String: AnyCodable].self, from: bytes)
         let hasID = envelope?["id"] != nil
 
         // Any well-formed object frame carrying a jsonrpc value other than
@@ -537,18 +538,18 @@ public final class MCPServer: Service, @unchecked Sendable {
         // plain String, so the version must be validated explicitly here;
         // missing or non-string jsonrpc is caught by the decode paths below.
         if let envelope, let version = envelope["jsonrpc"]?.value as? String, version != "2.0" {
-            _logger.warning("Invalid jsonrpc version '\(version)' in: \(String(decoding: data, as: UTF8.self))")
+            _logger.warning("Invalid jsonrpc version '\(version)' in: \(String(decoding: bytes, as: UTF8.self))")
             return makeErrorResponse(id: envelopeID(from: envelope) ?? .null, code: -32600, message: "Invalid Request")
         }
 
-        if let request = try? JSONDecoder().decode(JSONRPCRequest.self, from: data) {
+        if let request = try? QuickJSON.decode(JSONRPCRequest.self, from: bytes) {
             requestID = request.id
             methodName = request.method
             params = request.params
         } else if hasID {
-            _logger.warning("Invalid JSON-RPC request id in: \(String(decoding: data, as: UTF8.self))")
+            _logger.warning("Invalid JSON-RPC request id in: \(String(decoding: bytes, as: UTF8.self))")
             return makeErrorResponse(id: .null, code: -32600, message: "Invalid Request")
-        } else if let notification = try? JSONDecoder().decode(JSONRPCNotification.self, from: data) {
+        } else if let notification = try? QuickJSON.decode(JSONRPCNotification.self, from: bytes) {
             _logger.trace("Received notification: method=\(notification.method)")
             // Notifications never produce responses.
             return nil
@@ -557,10 +558,10 @@ public final class MCPServer: Service, @unchecked Sendable {
             // e.g. a request missing the jsonrpc field with no id. The JSON-RPC
             // spec reserves -32700 for input that is not valid JSON; anything
             // that parses but is malformed is an Invalid Request.
-            _logger.warning("Invalid JSON-RPC message: \(String(decoding: data, as: UTF8.self))")
+            _logger.warning("Invalid JSON-RPC message: \(String(decoding: bytes, as: UTF8.self))")
             return makeErrorResponse(id: .null, code: -32600, message: "Invalid Request")
         } else {
-            _logger.warning("Unable to parse JSON-RPC message: \(String(decoding: data, as: UTF8.self))")
+            _logger.warning("Unable to parse JSON-RPC message: \(String(decoding: bytes, as: UTF8.self))")
             return makeErrorResponse(id: .null, code: -32700, message: "Parse error")
         }
 
@@ -571,7 +572,7 @@ public final class MCPServer: Service, @unchecked Sendable {
 
         _logger.trace("Received request: method=\(methodName), id=\(requestID)")
 
-        let response: Data?
+        let response: [UInt8]?
 
         switch method {
         case .initialize:
@@ -631,14 +632,14 @@ public final class MCPServer: Service, @unchecked Sendable {
     ///
     /// Returns server capabilities including the negotiated protocol version
     /// and available features.
-    private func handleInitialize(request params: [String: AnyCodable]?, id: JSONRPCID) async throws -> Data {
+    private func handleInitialize(request params: [String: AnyCodable]?, id: JSONRPCID) async throws -> [UInt8] {
         // Lenient: read the requested version straight from the params — clients
         // may omit fields the strict InitializeParams model requires, and only
         // the version string is needed for negotiation.
         let requestedProtocolVersion = params?["protocolVersion"]?.value as? String
 
         if let params,
-           let initParams = try? JSONDecoder().decode(InitializeParams.self, from: try JSONEncoder().encode(params)) {
+           let initParams = try? QuickJSON.decode(InitializeParams.self, from: try QuickJSON.encode(params)) {
             _logger.info(
                 "Client initialized: \(initParams.clientInfo.name) v\(initParams.clientInfo.version) (protocol \(initParams.protocolVersion))"
             )
@@ -659,7 +660,7 @@ public final class MCPServer: Service, @unchecked Sendable {
     ///
     /// Builds a list of tool definitions with auto-generated JSON Schema
     /// for each registered tool that the caller has access to.
-    private func handleToolsList(id: JSONRPCID, caller: MCPCallerInfo) async throws -> Data {
+    private func handleToolsList(id: JSONRPCID, caller: MCPCallerInfo) async throws -> [UInt8] {
         var toolDefinitions: [MCPToolDefinition] = []
 
         // Dispatcher (macro-generated, typed) catalog first — the generated
@@ -723,7 +724,7 @@ public final class MCPServer: Service, @unchecked Sendable {
         params: [String: AnyCodable]?,
         id: JSONRPCID,
         caller: MCPCallerInfo
-    ) async throws -> Data {
+    ) async throws -> [UInt8] {
         guard let params, let toolName = params["name"]?.value as? String else {
             return makeErrorResponse(id: id, code: -32602, message: "Invalid params: missing tool name")
         }
@@ -768,7 +769,7 @@ public final class MCPServer: Service, @unchecked Sendable {
         toolName: String,
         arguments: [String: Any],
         caller: MCPCallerInfo
-    ) async -> Data {
+    ) async -> [UInt8] {
         if let toolType = toolType(named: toolName) {
             guard caller.accessLevel >= toolType.configuration.requiredAccess else {
                 _logger.warning("Access denied for tool: \(toolName) (caller level \(caller.accessLevel.rawValue))")
@@ -810,7 +811,7 @@ public final class MCPServer: Service, @unchecked Sendable {
         arguments: [String: Any],
         caller: MCPCallerInfo,
         invocation: () async throws -> MCPToolResult
-    ) async -> Data {
+    ) async -> [UInt8] {
         do {
             let result = try await invocation()
             return makeSuccessResponse(id: id, result: ToolsCallResult(content: result.content, isError: result.isError))
@@ -824,21 +825,22 @@ public final class MCPServer: Service, @unchecked Sendable {
                 return makeErrorResponse(id: id, code: -32603, message: error.description)
             }
         } catch {
-            _logger.warning("Tool \(toolName) execution error: \(error.localizedDescription)")
+            let message = readableErrorDescription(error)
+            _logger.warning("Tool \(toolName) execution error: \(message)")
             return makeSuccessResponse(
                 id: id,
-                result: ToolsCallResult(content: [.text(error.localizedDescription)], isError: true)
+                result: ToolsCallResult(content: [.text(message)], isError: true)
             )
         }
     }
 
     // MARK: - Helpers
 
-    /// The first byte of `data`, skipping ASCII whitespace, or `nil` if the
+    /// The first byte of `bytes`, skipping ASCII whitespace, or `nil` if the
     /// payload is empty or only whitespace. Used to classify the top-level
     /// JSON shape (object vs array) without a full decode.
-    private func firstNonWhitespaceByte(of data: Data) -> UInt8? {
-        for byte in data {
+    private func firstNonWhitespaceByte(of bytes: [UInt8]) -> UInt8? {
+        for byte in bytes {
             if byte != 0x20, byte != 0x09, byte != 0x0A, byte != 0x0D {
                 return byte
             }
@@ -851,14 +853,14 @@ public final class MCPServer: Service, @unchecked Sendable {
     /// is absent or is not a legal JSON-RPC id (bool, array, object).
     private func envelopeID(from envelope: [String: AnyCodable]) -> JSONRPCID? {
         guard let id = envelope["id"] else { return nil }
-        guard let data = try? JSONEncoder().encode(id) else { return nil }
-        return try? JSONDecoder().decode(JSONRPCID.self, from: data)
+        guard let encoded = try? QuickJSON.encode(id) else { return nil }
+        return try? QuickJSON.decode(JSONRPCID.self, from: encoded)
     }
 
     /// Encodes a JSON-RPC success response.
-    private func makeSuccessResponse<Result: Encodable & Sendable>(id: JSONRPCID, result: Result) -> Data {
+    private func makeSuccessResponse<Result: Encodable & Sendable>(id: JSONRPCID, result: Result) -> [UInt8] {
         do {
-            return try JSONEncoder().encode(JSONRPCResponse(id: id, result: result))
+            return try QuickJSON.encode(JSONRPCResponse(id: id, result: result))
         } catch {
             _logger.error("Failed to encode success response: \(error)")
             return makeErrorResponse(id: id, code: -32603, message: "Internal error: failed to encode response")
@@ -866,15 +868,28 @@ public final class MCPServer: Service, @unchecked Sendable {
     }
 
     /// Encodes a JSON-RPC error response.
-    private func makeErrorResponse(id: JSONRPCID, code: Int, message: String) -> Data {
+    private func makeErrorResponse(id: JSONRPCID, code: Int, message: String) -> [UInt8] {
         do {
-            return try JSONEncoder().encode(JSONRPCErrorResponse(id: id, code: code, message: message))
+            return try QuickJSON.encode(JSONRPCErrorResponse(id: id, code: code, message: message))
         } catch {
             // A fixed-shape error frame cannot realistically fail to encode.
             _logger.critical("Failed to encode error response: \(error)")
-            return Data()
+            return []
         }
     }
+}
+
+/// The user-facing description of an arbitrary thrown error.
+///
+/// Prefers a `LocalizedError`'s `errorDescription` (the canonical readable
+/// message tool authors provide) and falls back to the Swift description —
+/// the Foundation-`localizedDescription` contract without coupling callers
+/// to Foundation.
+func readableErrorDescription(_ error: Error) -> String {
+    if let localized = error as? any LocalizedError, let description = localized.errorDescription {
+        return description
+    }
+    return String(describing: error)
 }
 
 /// A result builder that carries each tool expression with its concrete type.

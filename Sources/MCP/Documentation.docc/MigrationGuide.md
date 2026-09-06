@@ -126,7 +126,7 @@ The ``MCPToolConfiguration`` struct now includes a `requiredAccess` property tha
 
 ### MCPTransport Handler Signature Changed
 
-The ``MCPTransport/start(handler:)`` handler now receives ``MCPCallerInfo`` in addition to data.
+The ``MCPTransport/start(handler:)`` handler now receives ``MCPCallerInfo`` in addition to the raw message bytes, which are carried as `[UInt8]` rather than Foundation `Data`.
 
 **Before:**
 ```swift
@@ -135,7 +135,7 @@ func start(handler: @Sendable @escaping (Data) async throws -> Data?) async thro
 
 **After:**
 ```swift
-func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws
+func start(handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?) async throws
 ```
 
 If you have a custom transport, update the handler signature and pass caller information.

@@ -11,6 +11,7 @@
 
 import Foundation
 import Logging
+import QuickJSON
 
 #if canImport(Darwin)
 import Darwin
@@ -33,10 +34,10 @@ public protocol MCPTransport: Sendable {
     /// Start the transport and begin processing messages.
     ///
     /// - Parameter handler: The message handler to invoke for incoming requests.
-    ///   The handler receives raw JSON-RPC data and caller information, and
-    ///   returns optional response data. Return `nil` for notifications that
+    ///   The handler receives raw JSON-RPC bytes and caller information, and
+    ///   returns optional response bytes. Return `nil` for notifications that
     ///   do not require a response.
-    func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws
+    func start(handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?) async throws
 
     /// Stop the transport.
     ///
@@ -54,17 +55,17 @@ public protocol MCPTransport: Sendable {
 /// - **Ordering**: Responses are written in the same order requests are received.
 /// - **Cancellation**: A cancelled actor stops processing new messages.
 actor TransportMessageHandler {
-    private let handler: @Sendable (Data, MCPCallerInfo) async throws -> Data?
+    private let handler: @Sendable ([UInt8], MCPCallerInfo) async throws -> [UInt8]?
     private let caller: MCPCallerInfo
-    private let write: @Sendable (Data) throws -> Void
-    private let makeError: @Sendable (Data, Error) -> Data?
+    private let write: @Sendable ([UInt8]) throws -> Void
+    private let makeError: @Sendable ([UInt8], Error) -> [UInt8]?
     private var isCancelled = false
 
     public init(
-        handler: @escaping @Sendable (Data, MCPCallerInfo) async throws -> Data?,
+        handler: @escaping @Sendable ([UInt8], MCPCallerInfo) async throws -> [UInt8]?,
         caller: MCPCallerInfo,
-        write: @escaping @Sendable (Data) throws -> Void,
-        makeError: @escaping @Sendable (Data, Error) -> Data?
+        write: @escaping @Sendable ([UInt8]) throws -> Void,
+        makeError: @escaping @Sendable ([UInt8], Error) -> [UInt8]?
     ) {
         self.handler = handler
         self.caller = caller
@@ -78,7 +79,7 @@ actor TransportMessageHandler {
     }
 
     /// Process a single message. Returns immediately without processing if cancelled.
-    public func process(_ data: Data) async {
+    public func process(_ data: [UInt8]) async {
         guard !isCancelled else { return }
         do {
             if let response = try await handler(data, caller) {
@@ -172,7 +173,7 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
     /// raises a poll/read error, or `stop()` is called.
     ///
     /// - Parameter handler: The message handler to invoke for incoming requests.
-    public func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
+    public func start(handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?) async throws {
         isRunning = true
 
         let stdin = inputHandle
@@ -189,13 +190,13 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
         let handlerActor = TransportMessageHandler(
             handler: handler,
             caller: caller,
-            write: { data in
-                var output = data
+            write: { bytes in
+                var output = bytes
                 output.append(0x0A) // Append newline
-                try stdout.write(contentsOf: output)
+                try writeRaw(output, to: stdout.fileDescriptor)
             },
-            makeError: { [logger] requestData, error in
-                guard let request = try? JSONDecoder().decode(JSONRPCRequest.self, from: requestData) else {
+            makeError: { [logger] requestBytes, error in
+                guard let request = try? QuickJSON.decode(JSONRPCRequest.self, from: requestBytes) else {
                     // Without an id there is no frame to reply to.
                     return nil
                 }
@@ -203,9 +204,9 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
                     let response = JSONRPCErrorResponse(
                         id: request.id,
                         code: -32603,
-                        message: "Internal error: \(error.localizedDescription)"
+                        message: "Internal error: \(readableErrorDescription(error))"
                     )
-                    return try JSONEncoder().encode(response)
+                    return try QuickJSON.encode(response)
                 } catch {
                     // A fixed-shape error frame cannot realistically fail to encode.
                     logger?.warning("Failed to encode stdio error response: \(error)")
@@ -218,7 +219,7 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
         // Read in chunks, scanning for newlines
         let chunkSize = 4096
         let pollInterval: Int32 = 250
-        var buffer = Data()
+        var buffer: [UInt8] = []
 
         pollLoop: while isRunning {
             switch pollStdin(timeoutMilliseconds: pollInterval, fileDescriptor: stdin.fileDescriptor) {
@@ -226,7 +227,7 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
                 continue
 
             case .readable:
-                let chunk: Data
+                let chunk: [UInt8]
                 do {
                     chunk = try readAvailableBytes(fileDescriptor: stdin.fileDescriptor, maxBytes: chunkSize)
                 } catch {
@@ -242,16 +243,16 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
                     break pollLoop
                 }
 
-                buffer.append(chunk)
+                buffer.append(contentsOf: chunk)
 
                 // Process all complete lines in the buffer
                 while let newlineIndex = buffer.firstIndex(of: 0x0A) {
                     let lineData = buffer[..<newlineIndex]
-                    buffer = buffer[newlineIndex.advanced(by: 1)...]
+                    buffer = Array(buffer[newlineIndex.advanced(by: 1)...])
 
                     guard isRunning else { break }
 
-                    let message = Data(lineData)
+                    let message = Array(lineData)
                     await handlerActor.process(message)
                 }
 
@@ -260,12 +261,12 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
                 // stays bounded no matter what the peer streams.
                 guard buffer.count <= maxMessageSize else {
                     logger?.warning("stdio message exceeds maximum size (\(maxMessageSize) bytes); closing connection")
-                    if let errorData = try? JSONEncoder().encode(
+                    if let errorData = try? QuickJSON.encode(
                         JSONRPCErrorResponse(id: .null, code: -32700, message: "Message too large")
                     ) {
                         var output = errorData
                         output.append(0x0A)
-                        try? stdout.write(contentsOf: output)
+                        try? writeRaw(output, to: stdout.fileDescriptor)
                     }
                     break pollLoop
                 }
@@ -347,8 +348,8 @@ private func pollStdin(timeoutMilliseconds: Int32, fileDescriptor: Int32) -> Std
 /// blocks waiting for a full buffer — while the client, having sent its
 /// request, waits for the reply with its write end still open. That is a
 /// deadlock. A poll-driven loop calls this only after `POLLIN`, so one read
-/// returns the available chunk immediately. Returns empty data at EOF.
-private func readAvailableBytes(fileDescriptor fd: Int32, maxBytes: Int) throws -> Data {
+/// returns the available chunk immediately. Returns an empty array at EOF.
+private func readAvailableBytes(fileDescriptor fd: Int32, maxBytes: Int) throws -> [UInt8] {
     var bytes = [UInt8](repeating: 0, count: maxBytes)
     let count = bytes.withUnsafeMutableBytes { buffer in
         read(fd, buffer.baseAddress, buffer.count)
@@ -356,5 +357,25 @@ private func readAvailableBytes(fileDescriptor fd: Int32, maxBytes: Int) throws 
     if count < 0 {
         throw MCPError.transportError("stdio read failed: \(String(cString: strerror(errno)))")
     }
-    return Data(bytes[0..<count])
+    return Array(bytes[0..<max(0, count)])
+}
+
+/// Writes the given bytes to the fd, looping over short writes.
+///
+/// Uses raw `write(2)` so no Foundation byte container or `FileHandle` write
+/// path is involved.
+private func writeRaw(_ bytes: [UInt8], to fd: Int32) throws {
+    var offset = 0
+    while offset < bytes.count {
+        let written = bytes.withUnsafeBytes { raw in
+            write(fd, raw.baseAddress?.advanced(by: offset), bytes.count - offset)
+        }
+        if written < 0 {
+            throw MCPError.transportError("stdio write failed: \(String(cString: strerror(errno)))")
+        }
+        if written == 0 {
+            throw MCPError.transportError("stdio write failed: connection closed")
+        }
+        offset += written
+    }
 }

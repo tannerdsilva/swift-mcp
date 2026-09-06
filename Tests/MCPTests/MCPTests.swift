@@ -1,6 +1,53 @@
 import Testing
 import Foundation
+import QuickJSON
 @testable import MCP
+
+// MARK: - JSON Test Support
+
+/// Encodes a JSON-compatible value tree into a wire frame.
+func encodeFrame(_ value: Any) -> [UInt8] {
+    try! QuickJSON.encode(AnyCodable(value))
+}
+
+/// Decodes a wire frame into a JSON-compatible value tree.
+func decodeFrame(_ bytes: [UInt8]) -> Any? {
+    (try? QuickJSON.decode(AnyCodable.self, from: bytes))?.value
+}
+
+/// Writes bytes to a file descriptor, looping over short writes.
+@discardableResult
+func testWrite(_ fd: Int32, _ bytes: [UInt8]) throws -> Int {
+    var offset = 0
+    while offset < bytes.count {
+        let written = bytes.withUnsafeBytes {
+            write(fd, $0.baseAddress?.advanced(by: offset), bytes.count - offset)
+        }
+        if written < 0 {
+            throw MCPError.transportError("test write failed: \(String(cString: strerror(errno)))")
+        }
+        if written == 0 {
+            throw MCPError.transportError("test write failed: connection closed")
+        }
+        offset += written
+    }
+    return offset
+}
+
+/// Reads all available bytes from a file descriptor until EOF.
+func testReadAll(_ fd: Int32) throws -> [UInt8] {
+    var out: [UInt8] = []
+    var bytes = [UInt8](repeating: 0, count: 4096)
+    while true {
+        let count = bytes.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+        if count < 0 {
+            throw MCPError.transportError("test read failed: \(String(cString: strerror(errno)))")
+        }
+        if count == 0 { break }
+        out.append(contentsOf: bytes[0..<count])
+    }
+    return out
+}
 
 // MARK: - Test Tools
 
@@ -490,8 +537,8 @@ func greetJSONSchema() {
 @Test("MCPContent text encoding")
 func contentTextEncoding() throws {
     let content = MCPContent.text("Hello")
-    let encoded = try JSONEncoder().encode(content)
-    let decoded = try JSONDecoder().decode(MCPContent.self, from: encoded)
+    let encoded = try QuickJSON.encode(content)
+    let decoded = try QuickJSON.decode(MCPContent.self, from: encoded)
     if case .text(let text) = decoded {
         #expect(text == "Hello")
     } else {
@@ -635,40 +682,40 @@ func optionGroupInvocation() async throws {
 @Test("AnyCodable encodes and decodes String")
 func anyCodableString() throws {
     let original = AnyCodable("hello")
-    let data = try JSONEncoder().encode(original)
-    let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+    let data = try QuickJSON.encode(original)
+    let decoded = try QuickJSON.decode(AnyCodable.self, from: data)
     #expect(decoded.value as? String == "hello")
 }
 
 @Test("AnyCodable encodes and decodes Int")
 func anyCodableInt() throws {
     let original = AnyCodable(42)
-    let data = try JSONEncoder().encode(original)
-    let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+    let data = try QuickJSON.encode(original)
+    let decoded = try QuickJSON.decode(AnyCodable.self, from: data)
     #expect(decoded.value as? Int == 42)
 }
 
 @Test("AnyCodable encodes and decodes Double")
 func anyCodableDouble() throws {
     let original = AnyCodable(3.14)
-    let data = try JSONEncoder().encode(original)
-    let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+    let data = try QuickJSON.encode(original)
+    let decoded = try QuickJSON.decode(AnyCodable.self, from: data)
     #expect(decoded.value as? Double == 3.14)
 }
 
 @Test("AnyCodable encodes and decodes Bool")
 func anyCodableBool() throws {
     let original = AnyCodable(true)
-    let data = try JSONEncoder().encode(original)
-    let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+    let data = try QuickJSON.encode(original)
+    let decoded = try QuickJSON.decode(AnyCodable.self, from: data)
     #expect(decoded.value as? Bool == true)
 }
 
 @Test("AnyCodable encodes and decodes dictionary")
 func anyCodableDict() throws {
     let original = AnyCodable(["key": "value"])
-    let data = try JSONEncoder().encode(original)
-    let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+    let data = try QuickJSON.encode(original)
+    let decoded = try QuickJSON.decode(AnyCodable.self, from: data)
     let dict = decoded.value as? [String: String]
     #expect(dict?["key"] == "value")
 }
@@ -676,8 +723,8 @@ func anyCodableDict() throws {
 @Test("AnyCodable encodes and decodes array")
 func anyCodableArray() throws {
     let original = AnyCodable([1, 2, 3])
-    let data = try JSONEncoder().encode(original)
-    let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+    let data = try QuickJSON.encode(original)
+    let decoded = try QuickJSON.decode(AnyCodable.self, from: data)
     let arr = decoded.value as? [Int]
     #expect(arr == [1, 2, 3])
 }
@@ -687,8 +734,8 @@ func anyCodableArray() throws {
 @Test("MCPContent image encoding and decoding")
 func contentImageEncoding() throws {
     let content = MCPContent.image(data: "base64data", mimeType: "image/png")
-    let encoded = try JSONEncoder().encode(content)
-    let decoded = try JSONDecoder().decode(MCPContent.self, from: encoded)
+    let encoded = try QuickJSON.encode(content)
+    let decoded = try QuickJSON.decode(MCPContent.self, from: encoded)
     if case .image(let data, let mimeType) = decoded {
         #expect(data == "base64data")
         #expect(mimeType == "image/png")
@@ -700,8 +747,8 @@ func contentImageEncoding() throws {
 @Test("MCPContent resource encoding and decoding")
 func contentResourceEncoding() throws {
     let content = MCPContent.resource(uri: "file:///path", mimeType: "text/plain", text: "content")
-    let encoded = try JSONEncoder().encode(content)
-    let decoded = try JSONDecoder().decode(MCPContent.self, from: encoded)
+    let encoded = try QuickJSON.encode(content)
+    let decoded = try QuickJSON.decode(MCPContent.self, from: encoded)
     if case .resource(let uri, let mimeType, let text) = decoded {
         #expect(uri == "file:///path")
         #expect(mimeType == "text/plain")
@@ -714,8 +761,8 @@ func contentResourceEncoding() throws {
 @Test("MCPContent resource with nil mimeType and text")
 func contentResourceNilFields() throws {
     let content = MCPContent.resource(uri: "file:///path", mimeType: nil, text: nil)
-    let encoded = try JSONEncoder().encode(content)
-    let decoded = try JSONDecoder().decode(MCPContent.self, from: encoded)
+    let encoded = try QuickJSON.encode(content)
+    let decoded = try QuickJSON.decode(MCPContent.self, from: encoded)
     if case .resource(let uri, let mimeType, let text) = decoded {
         #expect(uri == "file:///path")
         #expect(mimeType == nil)
@@ -730,8 +777,8 @@ func contentResourceNilFields() throws {
 @Test("MCPToolResult encodes and decodes")
 func toolResultCodable() throws {
     let original = MCPToolResult.text("Hello")
-    let data = try JSONEncoder().encode(original)
-    let decoded = try JSONDecoder().decode(MCPToolResult.self, from: data)
+    let data = try QuickJSON.encode(original)
+    let decoded = try QuickJSON.decode(MCPToolResult.self, from: data)
     #expect(decoded.isError == false)
     #expect(decoded.content.count == 1)
 }
@@ -739,8 +786,8 @@ func toolResultCodable() throws {
 @Test("MCPToolResult error encodes and decodes")
 func toolResultErrorCodable() throws {
     let original = MCPToolResult.error("Error message")
-    let data = try JSONEncoder().encode(original)
-    let decoded = try JSONDecoder().decode(MCPToolResult.self, from: data)
+    let data = try QuickJSON.encode(original)
+    let decoded = try QuickJSON.decode(MCPToolResult.self, from: data)
     #expect(decoded.isError == true)
 }
 
@@ -853,8 +900,8 @@ func paramKindRawValues() {
 @Test("MCPParamKind Codable")
 func paramKindCodable() throws {
     let kinds: [MCPParamKind] = [.argument, .option, .flag]
-    let data = try JSONEncoder().encode(kinds)
-    let decoded = try JSONDecoder().decode([MCPParamKind].self, from: data)
+    let data = try QuickJSON.encode(kinds)
+    let decoded = try QuickJSON.decode([MCPParamKind].self, from: data)
     #expect(decoded == kinds)
 }
 
@@ -872,8 +919,8 @@ func parameterInfoEquality() {
 @Test("MCPParameterInfo Codable")
 func parameterInfoCodable() throws {
     let original = MCPParameterInfo(name: "test", description: "A test param", required: true, kind: .argument, typeName: "String", hasDefault: false)
-    let data = try JSONEncoder().encode(original)
-    let decoded = try JSONDecoder().decode(MCPParameterInfo.self, from: data)
+    let data = try QuickJSON.encode(original)
+    let decoded = try QuickJSON.decode(MCPParameterInfo.self, from: data)
     #expect(decoded == original)
 }
 
@@ -1030,13 +1077,13 @@ func serverAddressSendable() {
 
 /// A mock transport that records sent messages and provides canned responses.
 final class MockTransport: MCPTransport, @unchecked Sendable {
-    var receivedMessages: [Data] = []
-    var sentMessages: [Data] = []
+    var receivedMessages: [[UInt8]] = []
+    var sentMessages: [[UInt8]] = []
     var shouldThrowOnStart = false
     var onStart: (@Sendable () async throws -> Void)?
     private var isRunning = false
 
-    func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
+    func start(handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?) async throws {
         if shouldThrowOnStart { throw MCPError.transportError("mock failure") }
         isRunning = true
         try await onStart?()
@@ -1083,7 +1130,7 @@ private func runTestServer<each Tool: MCPTool>(
 func serverInitialize() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "test", "version": "1.0"]]
         ])
@@ -1092,7 +1139,7 @@ func serverInitialize() async throws {
     try await runTestServer(transport: transport)
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     #expect(response?["jsonrpc"] as? String == "2.0")
     #expect(response?["id"] as? Int == 1)
 
@@ -1106,7 +1153,7 @@ func serverInitialize() async throws {
 func serverNegotiatesSupportedProtocolVersion() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-11-25", "clientInfo": ["name": "test", "version": "1.0"]]
         ])
@@ -1114,7 +1161,7 @@ func serverNegotiatesSupportedProtocolVersion() async throws {
 
     try await runTestServer(transport: transport)
 
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let result = response?["result"] as? [String: Any]
     #expect(result?["protocolVersion"] as? String == "2025-11-25")
 }
@@ -1123,11 +1170,11 @@ func serverNegotiatesSupportedProtocolVersion() async throws {
 func serverFallsBackToLatestProtocolVersion() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2099-01-01", "clientInfo": ["name": "test", "version": "1.0"]]
         ]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 2, "method": "initialize",
             "params": ["clientInfo": ["name": "test", "version": "1.0"]]
         ]),
@@ -1137,7 +1184,7 @@ func serverFallsBackToLatestProtocolVersion() async throws {
 
     #expect(transport.sentMessages.count == 2)
     for data in transport.sentMessages {
-        let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let response = decodeFrame(data) as? [String: Any]
         let result = response?["result"] as? [String: Any]
         #expect(result?["protocolVersion"] as? String == MCPServer.latestProtocolVersion)
     }
@@ -1147,11 +1194,11 @@ func serverFallsBackToLatestProtocolVersion() async throws {
 func serverPing() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "test", "version": "1.0"]]
         ]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 2, "method": "ping"
         ])
     ]
@@ -1159,7 +1206,7 @@ func serverPing() async throws {
     try await runTestServer(transport: transport) { Greet() }
 
     #expect(transport.sentMessages.count == 2)
-    let pingResponse = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let pingResponse = decodeFrame(transport.sentMessages[1]) as? [String: Any]
     #expect(pingResponse?["id"] as? Int == 2)
     #expect(pingResponse?["result"] != nil)
 }
@@ -1168,11 +1215,11 @@ func serverPing() async throws {
 func serverToolsList() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "test", "version": "1.0"]]
         ]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": [:]]
         )
     ]
@@ -1180,7 +1227,7 @@ func serverToolsList() async throws {
     try await runTestServer(transport: transport) { Greet(); Calculator() }
 
     #expect(transport.sentMessages.count == 2)
-    let listResponse = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let listResponse = decodeFrame(transport.sentMessages[1]) as? [String: Any]
     let result = listResponse?["result"] as? [String: Any]
     let tools = result?["tools"] as? [[String: Any]]
     #expect(tools?.count == 2)
@@ -1193,11 +1240,11 @@ func serverToolsList() async throws {
 func serverToolsCall() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "test", "version": "1.0"]]
         ]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": ["name": "greet", "arguments": ["name": "World"]]
         ])
@@ -1206,7 +1253,7 @@ func serverToolsCall() async throws {
     try await runTestServer(transport: transport) { Greet() }
 
     #expect(transport.sentMessages.count == 2)
-    let callResponse = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let callResponse = decodeFrame(transport.sentMessages[1]) as? [String: Any]
     let result = callResponse?["result"] as? [String: Any]
     let content = result?["content"] as? [[String: Any]]
     #expect(content?.first?["text"] as? String == "Hello, World!")
@@ -1216,11 +1263,11 @@ func serverToolsCall() async throws {
 func serverUnknownTool() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "test", "version": "1.0"]]
         ]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": ["name": "nonexistent", "arguments": [:]]
         ])
@@ -1229,7 +1276,7 @@ func serverUnknownTool() async throws {
     try await runTestServer(transport: transport) { Greet() }
 
     #expect(transport.sentMessages.count == 2)
-    let errorResponse = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let errorResponse = decodeFrame(transport.sentMessages[1]) as? [String: Any]
     let error = errorResponse?["error"] as? [String: Any]
     #expect(error?["code"] as? Int == -32602)
     #expect((error?["message"] as? String)?.contains("nonexistent") == true)
@@ -1239,11 +1286,11 @@ func serverUnknownTool() async throws {
 func serverUnknownMethod() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "test", "version": "1.0"]]
         ]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 2, "method": "unknown_method"
         ])
     ]
@@ -1251,7 +1298,7 @@ func serverUnknownMethod() async throws {
     try await runTestServer(transport: transport)
 
     #expect(transport.sentMessages.count == 2)
-    let errorResponse = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let errorResponse = decodeFrame(transport.sentMessages[1]) as? [String: Any]
     let error = errorResponse?["error"] as? [String: Any]
     #expect(error?["code"] as? Int == -32601)
 }
@@ -1260,14 +1307,14 @@ func serverUnknownMethod() async throws {
 func serverNotification() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "test", "version": "1.0"]]
         ]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "method": "notifications/initialized"
         ]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "method": "notifications/cancelled"
         ])
     ]
@@ -1282,11 +1329,11 @@ func serverNotification() async throws {
 func serverBuilderRegistration() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "test", "version": "1.0"]]
         ]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": [:]]
         )
     ]
@@ -1294,7 +1341,7 @@ func serverBuilderRegistration() async throws {
     try await runTestServer(transport: transport) { Greet(); Calculator() }
 
     #expect(transport.sentMessages.count == 2)
-    let listResponse = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let listResponse = decodeFrame(transport.sentMessages[1]) as? [String: Any]
     let result = listResponse?["result"] as? [String: Any]
     let tools = result?["tools"] as? [[String: Any]]
     #expect(tools?.count == 2)
@@ -1304,7 +1351,7 @@ func serverBuilderRegistration() async throws {
 func serverBuilderPreservesToolConfiguration() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": ["name": "prefixedEcho", "arguments": ["message": "hi"]]
         ])
@@ -1316,7 +1363,7 @@ func serverBuilderPreservesToolConfiguration() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let result = response?["result"] as? [String: Any]
     let content = result?["content"] as? [[String: Any]]
     // The configured prefix survives — a type-only register would answer "default".
@@ -1361,7 +1408,7 @@ func dispatcherSurfaceMethods() async throws {
 func dispatcherRoutesToolsCall() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": ["name": "greet", "arguments": ["name": "Disp"]]
         ])
@@ -1371,7 +1418,7 @@ func dispatcherRoutesToolsCall() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let result = response?["result"] as? [String: Any]
     let content = result?["content"] as? [[String: Any]]
     #expect(content?.first?["text"] as? String == "Hello, Disp!")
@@ -1381,14 +1428,14 @@ func dispatcherRoutesToolsCall() async throws {
 func dispatcherServesCatalog() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
+        encodeFrame(["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
     ]
 
     let server = MCPServer(name: "D", version: "1.0.0", transport: transport, dispatcher: AppServer())
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let tools = (response?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
     #expect(tools?.compactMap { $0["name"] as? String }.sorted() == ["calculate", "greet"])
 }
@@ -1397,7 +1444,7 @@ func dispatcherServesCatalog() async throws {
 func dispatcherDeniesBelowRequiredAccess() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": ["name": "rootOnly", "arguments": [:]]
         ])
@@ -1409,7 +1456,7 @@ func dispatcherDeniesBelowRequiredAccess() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let error = response?["error"] as? [String: Any]
     #expect(error?["code"] as? Int == -32000)
 }
@@ -1418,7 +1465,7 @@ func dispatcherDeniesBelowRequiredAccess() async throws {
 func dispatcherCatalogFiltersByAccess() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
+        encodeFrame(["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
     ]
 
     // .admin caller cannot see a .root tool — the generated catalog omits it.
@@ -1426,7 +1473,7 @@ func dispatcherCatalogFiltersByAccess() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let tools = (response?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
     #expect(tools?.isEmpty == true)
 }
@@ -1435,7 +1482,7 @@ func dispatcherCatalogFiltersByAccess() async throws {
 func hybridDispatcherAndRegistry() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
+        encodeFrame(["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
     ]
     let server = MCPServer(name: "D", version: "1.0.0", transport: transport, dispatcher: AppServer()) {
         PrefixedEchoTool(prefix: "dyn")
@@ -1444,7 +1491,7 @@ func hybridDispatcherAndRegistry() async throws {
 
     // greet/calculate come from the dispatcher, prefixedEcho from the registry.
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let tools = (response?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
     #expect(tools?.compactMap { $0["name"] as? String }.sorted() == ["calculate", "greet", "prefixedEcho"])
 }
@@ -1453,14 +1500,14 @@ func hybridDispatcherAndRegistry() async throws {
 func serverRejectsWrongJsonrpcVersion() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "1.0", "id": 10, "method": "tools/list"])
+        encodeFrame(["jsonrpc": "1.0", "id": 10, "method": "tools/list"])
     ]
 
     let server = MCPServer(name: "T", version: "1.0.0", transport: transport) { Greet() }
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     // A valid id is echoed even when the version label is rejected.
     #expect(response?["id"] as? Int == 10)
     let error = response?["error"] as? [String: Any]
@@ -1471,7 +1518,7 @@ func serverRejectsWrongJsonrpcVersion() async throws {
 func serverRespondsToNotificationWithID() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 7, "method": "notifications/initialized"])
+        encodeFrame(["jsonrpc": "2.0", "id": 7, "method": "notifications/initialized"])
     ]
 
     let server = MCPServer(name: "T", version: "1.0.0", transport: transport) { Greet() }
@@ -1480,7 +1527,7 @@ func serverRespondsToNotificationWithID() async throws {
     // JSON-RPC requires a response to every request — a notification method
     // carrying an id is acknowledged instead of hanging the caller.
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     #expect(response?["id"] as? Int == 7)
     #expect(response?["result"] != nil)
 }
@@ -1489,7 +1536,7 @@ func serverRespondsToNotificationWithID() async throws {
 func serverBatchRequests() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             ["jsonrpc": "2.0", "id": 1, "method": "ping"],
             ["jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": [:]],
         ])
@@ -1499,7 +1546,7 @@ func serverBatchRequests() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let batch = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [[String: Any]]
+    let batch = decodeFrame(transport.sentMessages[0]) as? [[String: Any]]
     #expect(batch?.count == 2)
     guard let batch else {
         Issue.record("Expected an array of responses")
@@ -1515,13 +1562,13 @@ func serverBatchRequests() async throws {
 @Test("Empty JSON-RPC batch is an Invalid Request")
 func serverEmptyBatchInvalidRequest() async throws {
     let transport = EOFMockTransport()
-    transport.receivedMessages = [Data("[]".utf8)]
+    transport.receivedMessages = [Array("[]".utf8)]
 
     let server = MCPServer(name: "T", version: "1.0.0", transport: transport) { Greet() }
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let error = response?["error"] as? [String: Any]
     #expect(error?["code"] as? Int == -32600)
 }
@@ -1530,7 +1577,7 @@ func serverEmptyBatchInvalidRequest() async throws {
 func serverMissingArgumentInvalidParams() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": ["name": "greet", "arguments": [:]]
         ])
@@ -1540,7 +1587,7 @@ func serverMissingArgumentInvalidParams() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let error = response?["error"] as? [String: Any]
     #expect(error?["code"] as? Int == -32602)
 }
@@ -1549,7 +1596,7 @@ func serverMissingArgumentInvalidParams() async throws {
 func serverToolExecutionErrorIsErrorResult() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 4, "method": "tools/call",
             "params": ["name": "explode", "arguments": [:]]
         ])
@@ -1559,7 +1606,7 @@ func serverToolExecutionErrorIsErrorResult() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     // No JSON-RPC error frame — execution failures are results, per the spec.
     #expect(response?["error"] == nil)
     let result = response?["result"] as? [String: Any]
@@ -1582,11 +1629,11 @@ func transportMessageHandlerOrdering() async throws {
             // Just verify we can write
             #expect(!data.isEmpty)
         },
-        makeError: { _, _ in nil as Data? }
+        makeError: { _, _ in nil as [UInt8]? }
     )
 
-    let message1 = Data("message1".utf8)
-    let message2 = Data("message2".utf8)
+    let message1 = Array("message1".utf8)
+    let message2 = Array("message2".utf8)
 
     await actor.process(message1)
     await actor.process(message2)
@@ -1602,11 +1649,11 @@ func transportMessageHandlerCancellation() async throws {
         },
         caller: MCPCallerInfo(sourceAddress: "test", accessLevel: .admin),
         write: { _ in },
-        makeError: { _, _ in nil as Data? }
+        makeError: { _, _ in nil as [UInt8]? }
     )
 
     await actor.cancel()
-    await actor.process(Data("should not process".utf8))
+    await actor.process(Array("should not process".utf8))
 
     #expect(count.value == 0)
 }
@@ -1617,11 +1664,11 @@ func transportMessageHandlerCancellation() async throws {
 func serverUnregister() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": ["protocolVersion": "2025-06-18", "clientInfo": ["name": "test", "version": "1.0"]]
         ]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": [:]]
         )
     ]
@@ -1640,7 +1687,7 @@ func serverUnregister() async throws {
     _ = await serverTask.result
 
     #expect(transport.sentMessages.count == 2)
-    let listResponse = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let listResponse = decodeFrame(transport.sentMessages[1]) as? [String: Any]
     let result = listResponse?["result"] as? [String: Any]
     let tools = result?["tools"] as? [[String: Any]]
     #expect(tools?.count == 1)
@@ -1707,10 +1754,10 @@ struct NumericProbe {
 /// A transport that finishes on its own after dispatching queued messages,
 /// simulating a clean client EOF on the stdio pipe.
 final class EOFMockTransport: MCPTransport, @unchecked Sendable {
-    var receivedMessages: [Data] = []
-    var sentMessages: [Data] = []
+    var receivedMessages: [[UInt8]] = []
+    var sentMessages: [[UInt8]] = []
 
-    func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
+    func start(handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?) async throws {
         for message in receivedMessages {
             if let response = try await handler(message, MCPCallerInfo(sourceAddress: "eof", accessLevel: .admin)) {
                 sentMessages.append(response)
@@ -1737,7 +1784,7 @@ func serverReturnsCleanlyOnTransportEOF() async throws {
 func serverReturnsCleanlyWhenStopped() async throws {
     let transport = MockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "ping"])
+        encodeFrame(["jsonrpc": "2.0", "id": 1, "method": "ping"])
     ]
     let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) { Greet() }
 
@@ -1753,29 +1800,29 @@ func serverReturnsCleanlyWhenStopped() async throws {
 func serverEchoesStringIDs() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": "abc", "method": "ping"]),
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": "xyz", "method": "tools/list"])
+        encodeFrame(["jsonrpc": "2.0", "id": "abc", "method": "ping"]),
+        encodeFrame(["jsonrpc": "2.0", "id": "xyz", "method": "tools/list"])
     ]
     let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) { Greet() }
     try await server.runService()
 
     #expect(transport.sentMessages.count == 2)
-    let ping = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let ping = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     #expect(ping?["id"] as? String == "abc")
     #expect(ping?["result"] != nil)
-    let list = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let list = decodeFrame(transport.sentMessages[1]) as? [String: Any]
     #expect(list?["id"] as? String == "xyz")
 }
 
 @Test("Server returns a parse error for a malformed frame")
 func serverParseError() async throws {
     let transport = EOFMockTransport()
-    transport.receivedMessages = [Data("this is not json".utf8)]
+    transport.receivedMessages = [Array("this is not json".utf8)]
     let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) { Greet() }
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let error = response?["error"] as? [String: Any]
     #expect(error?["code"] as? Int == -32700)
 }
@@ -1803,8 +1850,8 @@ func numericCoercionWholeDoubleOnly() throws {
 
 @Test("AnyCodable round-trips JSON null")
 func anyCodableNullRoundTrip() throws {
-    let data = try JSONEncoder().encode(AnyCodable(JSONNull()))
-    let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+    let data = try QuickJSON.encode(AnyCodable(JSONNull()))
+    let decoded = try QuickJSON.decode(AnyCodable.self, from: data)
     #expect(decoded.value is JSONNull)
 }
 
@@ -1812,9 +1859,9 @@ func anyCodableNullRoundTrip() throws {
 func serverJSONNullOptionalParameter() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": ["name": "variedTypesCommand", "arguments": ["name": "n", "level": NSNull()]]
+            "params": ["name": "variedTypesCommand", "arguments": ["name": "n", "level": JSONNull()]]
         ])
     ]
 
@@ -1822,9 +1869,9 @@ func serverJSONNullOptionalParameter() async throws {
     try await server.runService()
 
     // The null decoded into Optional "level" as nil — a success, not a type
-    // mismatch (the JSONNull sentinel routes to JSON null, not JSONSerialization).
+    // mismatch (the JSONNull sentinel encodes as JSON null in the frame).
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     #expect(response?["error"] == nil)
     let result = response?["result"] as? [String: Any]
     let content = result?["content"] as? [[String: Any]]
@@ -1835,16 +1882,16 @@ func serverJSONNullOptionalParameter() async throws {
 func serverNullArgumentIsTypeMismatch() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": ["name": "greet", "arguments": ["name": NSNull()]]
+            "params": ["name": "greet", "arguments": ["name": JSONNull()]]
         ])
     ]
     let server = MCPServer(name: "TestServer", version: "1.0.0", transport: transport) { Greet() }
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let error = response?["error"] as? [String: Any]
     // A mistyped argument is a client fault — invalid params, per spec.
     #expect(error?["code"] as? Int == -32602)
@@ -2068,7 +2115,7 @@ final class StdioPair {
 /// bytes. Uses a raw poll + read so a short response is returned immediately
 /// (mirrors the transport's own read path; `read(upToCount:)` would block
 /// waiting for a full buffer).
-private func readPipeWithTimeout(fd: Int32, timeout: TimeInterval) -> Data {
+private func readPipeWithTimeout(fd: Int32, timeout: TimeInterval) -> [UInt8] {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
         var pollFds = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
@@ -2076,10 +2123,10 @@ private func readPipeWithTimeout(fd: Int32, timeout: TimeInterval) -> Data {
         if result > 0, pollFds.revents & Int16(POLLIN) != 0 {
             var bytes = [UInt8](repeating: 0, count: 4096)
             let count = bytes.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
-            if count > 0 { return Data(bytes[0..<count]) }
+            if count > 0 { return Array(bytes[0..<count]) }
         }
     }
-    return Data()
+    return []
 }
 
 /// A minimal blocking TCP client used to drive the TCP transport end-to-end.
@@ -2129,14 +2176,14 @@ func stdioTransportExchangeAndEOF() async throws {
     {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"probe","version":"1"}}}
     {"jsonrpc":"2.0","id":2,"method":"tools/list"}
     """ + "\n"
-    try pair.inputWrite.write(contentsOf: Data(payload.utf8))
+    try testWrite(pair.inputWrite.fileDescriptor, Array(payload.utf8))
     // Clean EOF — before the F1 fix this ended in ServiceGroupError + SIGTRAP.
     try pair.inputWrite.close()
 
     try await server.runService()
 
     try pair.outputWrite.close()
-    let output = try pair.outputRead.readToEnd() ?? Data()
+    let output = try testReadAll(pair.outputRead.fileDescriptor)
     let text = String(decoding: output, as: UTF8.self)
     #expect(text.contains("\"id\":1"))
     #expect(text.contains("\"serverInfo\""))
@@ -2157,7 +2204,7 @@ func stdioTransportStopsCleanly() async throws {
     #expect(throws: Never.self) { try result.get() }
 
     try pair.outputWrite.close()
-    _ = try? pair.outputRead.readToEnd()
+    _ = try? testReadAll(pair.outputRead.fileDescriptor)
 }
 
 @Test("Stdio transport responds while stdin remains open")
@@ -2171,7 +2218,7 @@ func stdioRespondsWhileStdinOpen() async throws {
     // Send a complete request but keep the write end OPEN — a real client
     // sends its request and waits for the reply without closing stdin. The
     // read loop must answer on the first poll, not wait to fill its buffer.
-    try input.fileHandleForWriting.write(contentsOf: Data("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n".utf8))
+    try testWrite(input.fileHandleForWriting.fileDescriptor, Array("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n".utf8))
 
     let responseData = readPipeWithTimeout(fd: output.fileHandleForReading.fileDescriptor, timeout: 5)
     let text = String(decoding: responseData, as: UTF8.self)
@@ -2191,17 +2238,17 @@ func stdioOversizedFrameRejected() async throws {
         output: output.fileHandleForWriting,
         maxMessageSize: 1024
     )
-    let task = Task { try await transport.start { _, _ in nil as Data? } }
+    let task = Task { try await transport.start { _, _ in nil as [UInt8]? } }
 
     // One unbounded frame (no newline) far past the cap.
-    try input.fileHandleForWriting.write(contentsOf: Data(repeating: 0x61, count: 8192))
+    try testWrite(input.fileHandleForWriting.fileDescriptor, [UInt8](repeating: 0x61, count: 8192))
     try input.fileHandleForWriting.close()
 
     // The transport writes the error frame and stops instead of buffering forever.
     try await task.value
 
     try output.fileHandleForWriting.close()
-    let outputData = try output.fileHandleForReading.readToEnd() ?? Data()
+    let outputData = try testReadAll(output.fileHandleForReading.fileDescriptor)
     let text = String(decoding: outputData, as: UTF8.self)
     #expect(text.contains("Message too large"))
 }
@@ -2258,7 +2305,7 @@ func tcpStopBeforeStartDoesNotHang() async throws {
     try await transport.stop()
 
     // start() must bind, observe the recorded stop, close, and return.
-    try await transport.start { _, _ in nil as Data? }
+    try await transport.start { _, _ in nil as [UInt8]? }
 }
 
 @Test("TCP transport rejects an oversized frame and closes the connection")
@@ -2315,8 +2362,8 @@ func defaultAccessResolverLoopback() {
 func unregisterRemovesInstanceTool() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame(["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]]),
+        encodeFrame([
             "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "greet", "arguments": ["name": "x"]]
         ]),
     ]
@@ -2327,11 +2374,11 @@ func unregisterRemovesInstanceTool() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.count == 2)
-    let list = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let list = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let tools = (list?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
     #expect(tools?.isEmpty == true)
 
-    let call = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let call = decodeFrame(transport.sentMessages[1]) as? [String: Any]
     let error = call?["error"] as? [String: Any]
     #expect(error?["code"] as? Int == -32602)
 }
@@ -2340,7 +2387,7 @@ func unregisterRemovesInstanceTool() async throws {
 func instanceRegisteredToolInvocation() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "greet", "arguments": ["name": "Inst"]]
         ]),
     ]
@@ -2350,7 +2397,7 @@ func instanceRegisteredToolInvocation() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let content = (response?["result"] as? [String: Any])?["content"] as? [[String: Any]]
     #expect(content?.first?["text"] as? String == "Hello, Inst!")
 }
@@ -2386,7 +2433,7 @@ func registryConcurrentStress() async throws {
 final class RunUntilStoppedTransport: MCPTransport, @unchecked Sendable {
     private var isRunning = false
 
-    func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
+    func start(handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?) async throws {
         isRunning = true
         while isRunning {
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -2410,8 +2457,8 @@ struct ResourceTool: MCPTool {
 @Test("MCPContent resource encodes the spec's nested EmbeddedResource shape")
 func resourceContentSpecShape() throws {
     let result = MCPToolResult(content: [.resource(uri: "file:///x", mimeType: "text/plain", text: "hi")], isError: false)
-    let data = try JSONEncoder().encode(result)
-    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let data = try QuickJSON.encode(result)
+    let json = decodeFrame(data) as? [String: Any]
     let content = json?["content"] as? [[String: Any]]
     let block = content?.first
     #expect(block?["type"] as? String == "resource")
@@ -2426,7 +2473,7 @@ func resourceContentSpecShape() throws {
 func toolsCallResourceWireShape() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame([
             "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "resourceTool", "arguments": [:]]
         ]),
     ]
@@ -2436,7 +2483,7 @@ func toolsCallResourceWireShape() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.count == 1)
-    let response = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let response = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let content = (response?["result"] as? [String: Any])?["content"] as? [[String: Any]]
     let block = content?.first
     #expect(block?["type"] as? String == "resource")
@@ -2449,8 +2496,8 @@ func resourceContentSpecDecode() throws {
     let payload = """
     {"type":"resource","resource":{"uri":"file:///y","mimeType":"application/json","text":"{}"}}
     """
-    let data = Data(payload.utf8)
-    let decoded = try JSONDecoder().decode(MCPContent.self, from: data)
+    let data = Array(payload.utf8)
+    let decoded = try QuickJSON.decode(MCPContent.self, from: data)
     if case .resource(let uri, let mimeType, let text) = decoded {
         #expect(uri == "file:///y")
         #expect(mimeType == "application/json")
@@ -2499,7 +2546,7 @@ func codableOptionalParameterInjection() throws {
     try tool.apply(arguments: ["optionalName": "hello"])
     #expect(tool.optionalName == "hello")
 
-    try tool.apply(arguments: ["optionalName": NSNull()])
+    try tool.apply(arguments: ["optionalName": JSONNull()])
     #expect(tool.optionalName == nil)
 }
 
@@ -2551,7 +2598,7 @@ func mcpCommandVoidRunInvocation() async throws {
 func fractionalRequestIDIsEchoed() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1.5, "method": "ping"])
+        encodeFrame(["jsonrpc": "2.0", "id": 1.5, "method": "ping"])
     ]
     let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
 
@@ -2565,7 +2612,7 @@ func fractionalRequestIDIsEchoed() async throws {
     // A request with a fractional id must receive a response echoing that id.
     #expect(transport.sentMessages.count == 1)
     guard let data = transport.sentMessages.first else { return }
-    let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let response = decodeFrame(data) as? [String: Any]
     #expect(response?["id"] as? Double == 1.5)
     #expect(response?["result"] != nil)
 }
@@ -2574,10 +2621,10 @@ func fractionalRequestIDIsEchoed() async throws {
 
 /// A transport that delivers all messages to the handler with a `.public` caller.
 final class PublicCallerTransport: MCPTransport, @unchecked Sendable {
-    var receivedMessages: [Data] = []
-    var sentMessages: [Data] = []
+    var receivedMessages: [[UInt8]] = []
+    var sentMessages: [[UInt8]] = []
 
-    func start(handler: @Sendable @escaping (Data, MCPCallerInfo) async throws -> Data?) async throws {
+    func start(handler: @Sendable @escaping ([UInt8], MCPCallerInfo) async throws -> [UInt8]?) async throws {
         for message in receivedMessages {
             if let response = try await handler(message, MCPCallerInfo(sourceAddress: "public-probe", accessLevel: .public)) {
                 sentMessages.append(response)
@@ -2592,8 +2639,8 @@ final class PublicCallerTransport: MCPTransport, @unchecked Sendable {
 func instanceToolAccessEnforcement() async throws {
     let transport = PublicCallerTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]]),
-        try JSONSerialization.data(withJSONObject: [
+        encodeFrame(["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]]),
+        encodeFrame([
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": ["name": "adminInstance", "arguments": [:]]
         ]),
@@ -2609,11 +2656,11 @@ func instanceToolAccessEnforcement() async throws {
     }
     guard transport.sentMessages.count == 2 else { return }
 
-    let list = try JSONSerialization.jsonObject(with: transport.sentMessages[0]) as? [String: Any]
+    let list = decodeFrame(transport.sentMessages[0]) as? [String: Any]
     let tools = (list?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
     #expect(tools?.isEmpty == true)
 
-    let call = try JSONSerialization.jsonObject(with: transport.sentMessages[1]) as? [String: Any]
+    let call = decodeFrame(transport.sentMessages[1]) as? [String: Any]
     let error = call?["error"] as? [String: Any]
     #expect(error?["code"] as? Int == -32000)
 }
@@ -2656,7 +2703,7 @@ func extensionProvidedRunWorks() async throws {
 func emptyBuilderClosureWorks() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]]),
+        encodeFrame(["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]]),
     ]
     let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
     try await server.runService()
@@ -2665,7 +2712,7 @@ func emptyBuilderClosureWorks() async throws {
         Issue.record("expected a tools/list response")
         return
     }
-    let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let response = decodeFrame(data) as? [String: Any]
     let tools = (response?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
     #expect(tools?.isEmpty == true)
 }
@@ -2684,8 +2731,8 @@ func arrayParameterSchemaItems() {
 func invalidIDTypesGetErrorResponse() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": true, "method": "ping"]),
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": ["bad"], "method": "ping"]),
+        encodeFrame(["jsonrpc": "2.0", "id": true, "method": "ping"]),
+        encodeFrame(["jsonrpc": "2.0", "id": ["bad"], "method": "ping"]),
     ]
     let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
 
@@ -2693,7 +2740,7 @@ func invalidIDTypesGetErrorResponse() async throws {
 
     #expect(transport.sentMessages.count == 2)
     for data in transport.sentMessages {
-        let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let response = decodeFrame(data) as? [String: Any]
         let error = response?["error"] as? [String: Any]
         #expect(error?["code"] as? Int == -32600)
     }
@@ -2704,11 +2751,11 @@ func malformedObjectIsInvalidRequest() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
         // JSON object but missing the jsonrpc + id
-        try JSONSerialization.data(withJSONObject: ["method": "ping"]),
+        encodeFrame(["method": "ping"]),
         // JSON object, has id, missing jsonrpc
-        try JSONSerialization.data(withJSONObject: ["id": 9, "method": "ping"]),
+        encodeFrame(["id": 9, "method": "ping"]),
         // genuine garbage (not JSON) — sticks with -32700
-        Data("this is not json".utf8),
+        Array("this is not json".utf8),
     ]
     let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
 
@@ -2717,12 +2764,12 @@ func malformedObjectIsInvalidRequest() async throws {
     #expect(transport.sentMessages.count == 3)
     // JSON objects that fail to decode as request or notification -> -32600.
     for data in transport.sentMessages.prefix(2) {
-        let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let response = decodeFrame(data) as? [String: Any]
         let error = response?["error"] as? [String: Any]
         #expect(error?["code"] as? Int == -32600)
     }
     // Genuine non-JSON input stays -32700 Parse error.
-    let garbage = try JSONSerialization.jsonObject(with: transport.sentMessages[2]) as? [String: Any]
+    let garbage = decodeFrame(transport.sentMessages[2]) as? [String: Any]
     let garbageError = garbage?["error"] as? [String: Any]
     #expect(garbageError?["code"] as? Int == -32700)
 }
@@ -2731,8 +2778,8 @@ func malformedObjectIsInvalidRequest() async throws {
 func idlessFramesStaySilent() async throws {
     let transport = EOFMockTransport()
     transport.receivedMessages = [
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "method": "notifications/initialized"]),
-        try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "method": "notifications/cancelled"]),
+        encodeFrame(["jsonrpc": "2.0", "method": "notifications/initialized"]),
+        encodeFrame(["jsonrpc": "2.0", "method": "notifications/cancelled"]),
     ]
     let server = MCPServer(name: "T", version: "1.0.0", transport: transport)
 

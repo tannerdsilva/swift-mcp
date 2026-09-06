@@ -231,8 +231,18 @@ public struct AnyCodable: Codable, @unchecked Sendable {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() { value = JSONNull() }
         else if let v = try? container.decode(String.self) { value = v }
-        else if let v = try? container.decode(Int.self) { value = v }
-        else if let v = try? container.decode(Double.self) { value = v }
+        else if let num = try? container.decode(Double.self) {
+            // QuickJSON v2's integer decode returns 0 for real-number JSON
+            // values instead of throwing; re-verify integrality through the
+            // Double so a fractional number stays a `Double` — a bare Int
+            // probe would turn 3.5 into 0. Integral values promote to `Int`
+            // with exactness preserved for in-range magnitudes.
+            if let intVal = try? container.decode(Int.self), Double(intVal) == num {
+                value = intVal
+            } else {
+                value = num
+            }
+        }
         else if let v = try? container.decode(Bool.self) { value = v }
         else if let v = try? container.decode([String: AnyCodable].self) { value = v.mapValues(\.value) }
         else if let v = try? container.decode([AnyCodable].self) { value = v.map(\.value) }
