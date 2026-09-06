@@ -358,32 +358,10 @@ private func floatingPointWholeCoercion<I: BinaryInteger & FixedWidthInteger>(_ 
 /// `Codable & Sendable` parameter types — enums, structs, optionals — are
 /// decoded by round-tripping that tree through QuickJSON's Codable stack.
 private func decodeCodableValue<Value: Decodable>(_ value: Any, as type: Value.Type) -> Value? {
-    // QuickJSON v2's integer decode returns 0 for a real-number JSON value
-    // instead of throwing (yyjson_get_sint returns 0 for reals). Emulate the
-    // strict behavior Foundation's JSONDecoder had: a non-integral number
-    // must not satisfy an integer parameter, or 3.5 would silently become 0.
-    if Value.self is any BinaryInteger.Type, containsNonIntegralNumber(value) {
-        return nil
-    }
     // Route the value tree through `AnyCodable`: a `JSONNull` marker encodes
     // as JSON `null` (succeeding for Optional<W> parameters, failing for
     // non-optional ones), and bare scalars serialize as JSON fragments, not
     // just dictionaries.
     guard let encoded = try? QuickJSON.encode(AnyCodable(value)) else { return nil }
     return try? QuickJSON.decode(type, from: encoded)
-}
-
-/// True when the JSON-compatible value tree contains a non-integral number
-/// anywhere (`3.5`, `-0.25`, infinity).
-private func containsNonIntegralNumber(_ value: Any) -> Bool {
-    if let double = value as? Double {
-        return !double.isFinite || double.rounded() != double
-    }
-    if let array = value as? [Any] {
-        return array.contains(where: containsNonIntegralNumber)
-    }
-    if let dict = value as? [String: Any] {
-        return dict.values.contains(where: containsNonIntegralNumber)
-    }
-    return false
 }

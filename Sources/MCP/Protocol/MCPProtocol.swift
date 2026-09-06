@@ -143,17 +143,10 @@ enum JSONRPCID: Codable, Sendable, Hashable {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             self = .null
+        } else if let intValue = try? container.decode(Int.self) {
+            self = .int(intValue)
         } else if let doubleValue = try? container.decode(Double.self) {
-            // QuickJSON v2's integer decode returns 0 for real-number JSON
-            // values instead of throwing, so a bare Int probe would swallow
-            // fractional ids (3.5 → 0). Classify through the Double and only
-            // promote to `.int` when the value is genuinely integral,
-            // preserving exact integers for in-range values.
-            if let intValue = try? container.decode(Int.self), Double(intValue) == doubleValue {
-                self = .int(intValue)
-            } else {
-                self = .number(doubleValue)
-            }
+            self = .number(doubleValue)
         } else if let stringValue = try? container.decode(String.self) {
             self = .string(stringValue)
         } else {
