@@ -410,6 +410,13 @@ maintainer:
 
 - HTTP+SSE transport, TLS, streaming responses, resources/prompts — unrelated to this plan.
 - dylib tool bundles — stated non-goal, unchanged.
+- **subprocess-over-a-local-socket bridge — stated non-goal (decision, Sep 2026).** The
+  subprocess deployment is stdio, period; the networked deployment is TCP. An opt-in bridge
+  where the spawned server binds a Unix-socket/loopback listener and the client reuses
+  `TCPClientTransport` was considered for loopback identity, portability, and code reuse,
+  and explicitly rejected by the maintainer. Do not resurrect it: stdio-subprocess and the
+  usual TCP stack are the only two supported shapes, and each already delivers the parity
+  work of 1.1.0 (cooperative shutdown, injected identity, backpressure).
 - Any arc-agent consumer work (`ToolEntry(tool:)`, `PluginToolRegistry`) — the plan ends where
   swift-mcp's client surface ends; arc integration is arc's increment path (plan §7).
 
