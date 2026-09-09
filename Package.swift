@@ -40,8 +40,28 @@ let package = Package(
             url: "https://github.com/tannerdsilva/QuickJSON.git",
             from: "2.0.0"
         ),
+        // SwiftSlash v5 — bring-your-own data channels: bind a caller-owned
+        // NIO pipe channel onto a spawned child's stdio while SwiftSlash
+        // handles spawn, reaping, and cancellation only.
+        .package(
+            url: "https://github.com/tannerdsilva/SwiftSlash.git",
+            from: "5.0.0"
+        ),
     ],
     targets: [
+        // --- Test fixture server ---
+        //
+        // standalone `@MCPApplication` executable spawned by the real-client
+        // integration verification (mcp-python SDK over stdio) and later by
+        // the Phase 2 subprocess-client tests. not part of the library.
+        .executableTarget(
+            name: "MCPFixtureServer",
+            dependencies: ["MCP"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+
         // --- Main MCP library ---
         .target(
             name: "MCP",
@@ -54,6 +74,7 @@ let package = Package(
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "QuickJSON", package: "QuickJSON"),
+                .product(name: "SwiftSlash", package: "SwiftSlash"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
@@ -81,6 +102,10 @@ let package = Package(
                 "MCP",
                 "MCPMacros",
                 .product(name: "QuickJSON", package: "QuickJSON"),
+                .product(name: "SwiftSlash", package: "SwiftSlash"),
+                .product(name: "NIO", package: "swift-nio"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

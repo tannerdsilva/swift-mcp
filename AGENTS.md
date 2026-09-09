@@ -4,21 +4,24 @@
 
 ## Overview
 
-A Swift package that provides an MCP (Model Context Protocol) server framework with a declarative, property-wrapper-based API. Includes a macro suite (`@MCPCommand`, `@FuncTool`, `@MCPApplication`, `@MCPOptionGroup`) that generates `MCPTool` conformances and server entry points at compile time — no runtime reflection.
+A Swift package that provides an MCP (Model Context Protocol) framework with a declarative, property-wrapper-based API. It serves tools (`@MCPCommand`, `@FuncTool`, `@MCPApplication`, `@MCPOptionGroup` generate `MCPTool` conformances and server entry points at compile time — no runtime reflection) and, since Sep 2026, consumes them as a client: `MCPClient` speaks MCP-by-subprocess over SwiftSlash-spawned tool-server binaries, or over TCP, with the same framing core in both roles.
 
-The server uses **Swift Service Lifecycle** as its primary runtime mechanism. `MCPServer` conforms to the `Service` protocol and must be run via a `ServiceGroup`. Use `runService()` for a convenient signal-handling wrapper, or create your own `ServiceGroup` for full control.
+The **unified NIO transport pipeline** is the load-bearing architecture: one `MCPFrameCodec` (newline-delimited JSON-RPC framing + per-frame size cap) and one `MCPMessageRouter` (the JSON-RPC routing core) serve every deployment — server TCP, server stdio, and the client carriers. Server and client cannot drift.
+
+The server uses **Swift Service Lifecycle** as its primary runtime mechanism. `MCPServer` conforms to the `Service` protocol and must be run via a `ServiceGroup`. Use `runService()` for a convenient signal-handling wrapper, or create your own `ServiceGroup` for full control. The client side wraps the same way (`MCPClientService`).
 
 ## Project Structure
 
 ```
 Sources/
-  MCP/                           — Main library (14 files)
+  MCP/                           — Main library
     Core/                        — Core protocols and types
       MCPTool.swift              — MCPTool protocol, MCPContext; default discovery/apply
       MCPToolConfiguration.swift — Tool metadata (description, name, access)
       MCPParam.swift             — MCPParameterInfo, MCPToolID, AccessLevel, MCPCallerInfo, StaticMCPGroup
       MCPContent.swift           — MCPToolResult, MCPContent, AnyCodable
       MCPError.swift             — MCPError enum (Error + Sendable + Equatable)
+      MCPToolDispatcher.swift    — MCPToolDispatcher protocol + MCPToolDescriptor
     PropertyWrappers/
       PropertyWrappers.swift     — @Argument, @Option, @Flag, @OptionGroup (value-type wrappers)
       Tool.swift                 — @Tool property wrapper + ToolAvailability
@@ -26,11 +29,24 @@ Sources/
       JSONSchemaBuilder.swift    — JSON Schema Draft 7 generation from parameter metadata
     Protocol/
       MCPProtocol.swift          — typed JSON-RPC/MCP message layer (request/response/id, results)
+    Transport/                   — the shared NIO transport core (server + client)
+      MCPFrameCodec.swift        — newline-delimited JSON-RPC framing + per-frame size cap (one impl, every carrier)
+      MCPMessageRouter.swift     — the byte-level JSON-RPC routing core; owns tool registries
+      MCPMessageHandler.swift    — NIO frame→actor dispatch glue (TCP connections + stdio channel)
+      TransportMessageHandler.swift — per-channel ordering/backpressure actor
     Server/
       MCPServer.swift            — Server class (conforms to Service from ServiceLifecycle)
-      Transport.swift            — MCPTransport protocol + StdioTransport + TransportMessageHandler actor
+      Transport.swift            — MCPTransport protocol + StdioTransport (NIO pipe channel over dup'd std streams)
       TCPTransport.swift         — TCP transport (IPv4, IPv6, dual-stack, Unix sockets)
       ServerAddress.swift        — ServerAddress enum (hostname, Unix socket)
+    Client/                      — the client role (MCP-by-subprocess and network carriers)
+      MCPClient.swift            — actor state machine: spawn/handshake/in-flight table/catalog/timeouts
+      ClientTransport.swift      — ClientTransport protocol, MCPClientError, ResumeOnce
+      SubprocessClientTransport.swift — SwiftSlash v5 BYO + NIO pipe channel; shutdown ladder
+      TCPClientTransport.swift     — NIO socket client carrier (hostname + Unix sockets)
+      LocalClientTransport.swift — network-free carrier over MCPMessageRouter
+      MCPClientService.swift     — Service wrapper for harness ServiceGroups
+      RemoteToolDescriptor.swift — wire catalog entry
     Macros.swift                 — @MCPCommand, @FuncTool, @MCPApplication, @MCPOptionGroup macro declarations
   MCPMacros/                     — Macro implementation target (SwiftSyntax)
     Plugin.swift                 — Compiler plugin entry point
@@ -39,9 +55,11 @@ Sources/
     MCPOptionGroupMacro.swift    — ExtensionMacro: generates StaticMCPGroup metadata
     ToolMacro.swift              — PeerMacro: generates tool structs from functions
     MCPApplicationMacro.swift    — MemberMacro: generates ToolID enum, dispatch, main
+  MCPFixtureServer/              — test fixture: @MCPApplication stdio server (echo/add/slow) spawned by client tests
 Tests/
   MCPTests/                      — Framework + integration tests (Swift Testing)
     MCPTests.swift               — unit, server routing, registry, transport end-to-end tests
+    MCPClientTests.swift         — client over subprocess: round-trip, timeouts, mid-call kill, oversize, ladder, stderr tail
   MCPMacroTests/                 — Macro expansion + diagnostic tests
     MCPCommandMacroTests.swift   — strict expansion asserts with re-parse gate
 Sources/MCP/Documentation.docc/ — DocC catalog (primary documentation)
@@ -57,6 +75,15 @@ Sources/MCP/Documentation.docc/ — DocC catalog (primary documentation)
       RealWorldScenarios.md       — File server, DB proxy, AI assistant, build system
       /LICENSE.txt
 ```
+
+## Unified NIO Transport Pipeline
+
+Framing and routing are single-sourced so no deployment can drift:
+
+- **`MCPFrameCodec`** — one `ChannelDuplexHandler` doing newline-delimited JSON-RPC framing with a per-frame size cap (`maxMessageSize`, 10 MiB default). An oversized frame — complete line or partial remainder — is rejected with a `-32700 Message too large` frame and the channel closes. Used by: server TCP, server stdio, client subprocess, client TCP.
+- **`MCPMessageRouter`** — the byte-level JSON-RPC routing core (batches, id-routing, initialize negotiation, tools/list, tools/call, access gates, error mapping). Owns the tool registries; `MCPServer` is a thin facade over it. The in-process `LocalClientTransport` drives it with zero bytes.
+- **Server glue** — `MCPMessageHandler` (NIO frame → `TransportMessageHandler` actor, with the stdio drain-then-close contract on half-close) + `TransportMessageHandler` (per-channel ordering/backpressure).
+- **`StdioTransport`** runs on a NIO pipe channel over `dup(0)`/`dup(1)` (the raw `poll` loop is gone, Sep 2026); NIO owns the duplicates, never the real std streams.
 
 ## Macro Suite
 
@@ -115,9 +142,18 @@ try await serviceGroup.run()
 
 1. `MCPServer` conforms to the `Service` protocol from ServiceLifecycle
 2. `MCPServer.run()` drives the transport directly and returns when the transport completes — client EOF on stdio, listener close on TCP — or after graceful shutdown stops it
-3. A graceful-shutdown handler registered in `run()` fans `MCPTransport/stop()` out to the transport, so signal-initiated shutdown wakes the poll-based stdio read loop promptly
+3. A graceful-shutdown handler registered in `run()` fans `MCPTransport/stop()` out to the transport, so signal-initiated shutdown closes the transport's channel/read loop promptly
 4. `runService()` configures the server service with `.gracefullyShutdownGroup` success termination behavior, so a completed session (EOF) ends the process cleanly instead of crashing with `serviceFinishedUnexpectedly`
 5. Hosts embedding `MCPServer` in their own `ServiceGroup` choose their own success termination behavior (`cancelGroup`, `gracefullyShutdownGroup`, or `ignore`)
+
+### Client role — MCP by subprocess
+
+`MCPClient` is an actor (state: idle → spawning → handshake → ready → shuttingDown → disconnected) over a `ClientTransport` carrier. Three carriers are implemented: `SubprocessClientTransport` (SwiftSlash 5.0 BYO data channels + NIO pipe channel), `TCPClientTransport` (NIO socket channel, hostname + Unix sockets), and the network-free `LocalClientTransport`, which drives the shared `MCPMessageRouter` with zero bytes and zero processes — the same actor, timeouts, and catalog logic on top. `MCPClientService` wraps one plugin as a `Service` for host `ServiceGroup`s.
+
+- **Framing:** newline-delimited JSON-RPC both ways; the child-facing pipe ends go to SwiftSlash via `.byo(fd:)`; the parent ends become a NIO duplex channel (input = stdout read end, output = stdin write end). stderr stays on SwiftSlash's built-in line stream → logger + retained tail.
+- **The CLOEXEC trap:** every parent pipe end (and every NIO dup) MUST be marked `FD_CLOEXEC`. posix_spawn inherits non-CLOEXEC fds, and an inherited copy of the stdin *write* end keeps the pipe open forever — the child never sees stdin EOF and the clean-shutdown ladder always escalates.
+- **Shutdown ladder** (the only shutdown signal is EOF on stdin): close the transport's stdin write end + the channel (rung 1) → grace (2s default) → SIGTERM → SIGKILL to the process group (`kill(-pid)`); SwiftSlash guarantees the reap on every rung.
+- **Timeout machinery:** per-request deadlines and the ladder's grace are two unstructured `Task`s resolving a continuation exactly once through a Mutex gate (`ResumeOnce`). Do NOT convert these to `withTaskGroup` racing — group-child scheduling is unreliable in strict-concurrency builds on this toolchain (siblings can silently never run, hanging the group).
 
 ## MCP Protocol Support
 
@@ -141,10 +177,27 @@ Not yet implemented:
 ## Building & Testing
 
 ```bash
-swift build           # Build the library and macros
-swift test            # Run all tests (framework + macro expansion)
+swift build           # Build the library, macros, and the MCPFixtureServer executable
+swift test            # Run all tests (framework + macro expansion + client subprocess suite)
+                      #   note: client tests spawn .build/debug/MCPFixtureServer — run `swift build` first
 swift package --disable-sandbox generate-documentation   # Build the DocC catalog
 ```
+
+**Verification discipline** — never trust self-round-trip tests alone:
+1. Server role: drive the built `MCPFixtureServer` over stdio with the official mcp Python SDK (`initialize` → `list_tools` → `call_tool` under a 30s bound). Run the SDK's own `MCPServer` as the control first; if the control fails, the harness is broken, not the server.
+2. Client role: drive a third-party stdio server (e.g. the SDK's `MCPServer`) with `MCPClient` over `SubprocessClientTransport`. Recipe + venv setup live in the `swift-mcp-server-authoring` skill.
+3. The in-repo client suite covers round-trip, timeouts, mid-call kill, oversize frames, clean EOF exit, TERM→KILL escalation, and stderr-tail retention against the spawned fixture.
+
+**Verification matrix** (the transport unification's cross-checks; `✓` cells are regression-tested or control-verified in this repo):
+
+| client \ server | swift-mcp stdio | swift-mcp TCP | third-party |
+|---|---|---|---|
+| `SubprocessClientTransport` | ✓ in-repo suite | — | ✓ manual control (mcp SDK `MCPServer`) |
+| `TCPClientTransport` | — | ✓ in-repo suite (IPv4 + Unix socket) | — (no third-party raw-TCP MCP server in the wild; shares the codec/actor verified over stdio) |
+| `LocalClientTransport` | — | ✓ in-repo (semantic catalog parity vs TCP) | — |
+| official mcp SDK (as client) | ✓ control experiment | — | ✓ control |
+
+Every meaningful cell is green; the `—` cells are structural (a stdio-only client cannot reach a TCP server and vice versa) or have no third-party peer to test against.
 
 ## Conventions
 
