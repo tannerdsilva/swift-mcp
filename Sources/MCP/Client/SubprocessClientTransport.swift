@@ -74,6 +74,13 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
         /// How long `stop()` waits for a graceful child exit before escalating
         /// to signals. Defaults to 2s.
         public var shutdownGrace: Duration = .seconds(2)
+        /// The access level the harness declares for this plugin. Injected into
+        /// the child over the environment, so the plugin's server applies the
+        /// same access gates a networked caller would. Defaults to `.root`.
+        public var trustLevel: AccessLevel = .root
+        /// An optional caller identity to surface to the plugin (logged and
+        /// available in tool `MCPContext.callerInfo`). Defaults to `nil`.
+        public var callerIdentity: String?
 
         /// Creates a spawn configuration.
         ///
@@ -84,13 +91,17 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
         ///   - workingDirectory: Optional working directory for the child.
         ///   - maxMessageSize: Max client-side frame size (default 10 MiB).
         ///   - shutdownGrace: Grace period before signal escalation (default 2s).
+        ///   - trustLevel: The declared plugin access level (default `.root`).
+        ///   - callerIdentity: Optional caller identity surfaced to the plugin.
         public init(
             executable: String,
             arguments: [String] = [],
             environment: [String: String] = [:],
             workingDirectory: String? = nil,
             maxMessageSize: Int = 10 * 1024 * 1024,
-            shutdownGrace: Duration = .seconds(2)
+            shutdownGrace: Duration = .seconds(2),
+            trustLevel: AccessLevel = .root,
+            callerIdentity: String? = nil
         ) {
             self.executable = executable
             self.arguments = arguments
@@ -98,6 +109,8 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
             self.workingDirectory = workingDirectory
             self.maxMessageSize = maxMessageSize
             self.shutdownGrace = shutdownGrace
+            self.trustLevel = trustLevel
+            self.callerIdentity = callerIdentity
         }
     }
 
@@ -108,8 +121,12 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
     private let eventLoopGroup: EventLoopGroup
     private let logger: Logger?
     private let oversizeErrorFrame: [UInt8]
-    private let framesStream: AsyncStream<[UInt8]>
-    private let framesContinuation: AsyncStream<[UInt8]>.Continuation
+    /// The backpressured producer/consumer halves of the frame stream.
+    private let clientFrames: ClientFrames
+    /// Live stderr lines (newest-dropping), for callers that want real-time
+    /// diagnostics in addition to the retained tail.
+    private let stderrStream: AsyncStream<String>
+    private let stderrContinuation: AsyncStream<String>.Continuation
 
     /// Guards the runtime state below.
     private let stateLock = Mutex<()>(())
@@ -154,9 +171,10 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
         self.logger = logger
         self.oversizeErrorFrame =
             (try? QuickJSON.encode(JSONRPCErrorResponse(id: .null, code: -32700, message: "Message too large"))) ?? []
-        var continuation: AsyncStream<[UInt8]>.Continuation!
-        self.framesStream = AsyncStream { continuation = $0 }
-        self.framesContinuation = continuation
+        self.clientFrames = ClientFrames()
+        var stderrContinuation: AsyncStream<String>.Continuation!
+        self.stderrStream = AsyncStream<String>(bufferingPolicy: .bufferingNewest(256)) { stderrContinuation = $0 }
+        self.stderrContinuation = stderrContinuation
     }
 
     /// The child's exit status, once the process has been reaped.
@@ -222,18 +240,19 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
         let command: Command
         do {
             let wd = configuration.workingDirectory.map(Path.init) ?? CurrentEnvironment.workingDirectory()
+            let environment = Self.spawnEnvironment(configuration)
             if configuration.executable.contains("/") {
                 command = Command(
                     absolutePath: Path(configuration.executable),
                     arguments: configuration.arguments,
-                    environment: configuration.environment,
+                    environment: environment,
                     workingDirectory: wd
                 )
             } else {
                 command = try Command(
                     configuration.executable,
                     arguments: configuration.arguments,
-                    environment: configuration.environment,
+                    environment: environment,
                     workingDirectory: wd
                 )
             }
@@ -283,14 +302,17 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
             self.parentStdoutReadFD = stdout[0]
         }
 
-        // Drain stderr (built-in SwiftSlash stream) to the logger + retained tail.
+        // Drain stderr (built-in SwiftSlash stream) to the logger, the retained
+        // tail, AND a live listener stream for diagnostics.
         let stderrStream = child.stderr
+        let stderrContinuation = self.stderrContinuation
         let stderrTask = Task { [stderrStream, childLogger] in
             for await lines in stderrStream {
                 for line in lines {
                     let text = String(decoding: line, as: UTF8.self)
-                    childLogger?.debug("child stderr: \(text)")
                     self.recordStderrLine(text)
+                    stderrContinuation.yield(text)
+                    childLogger?.debug("child stderr: \(text)")
                 }
             }
         }
@@ -322,10 +344,11 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
         let channel: Channel
         do {
             channel = try await NIOPipeBootstrap(group: eventLoopGroup)
-                .channelInitializer { [framesContinuation, maxMessageSize, oversizeErrorFrame, logger] channel in
+                .channelOption(ChannelOptions.autoRead, value: false)
+                .channelInitializer { [clientFrames, maxMessageSize, oversizeErrorFrame, logger] channel in
                     channel.pipeline.addHandlers(
                         MCPFrameCodec(maxMessageSize: maxMessageSize, oversizeErrorFrame: oversizeErrorFrame),
-                        ClientFrameBridge(continuation: framesContinuation, logger: logger)
+                        ClientFrameBridge(source: clientFrames.source, demand: clientFrames.demand, logger: logger)
                     )
                 }
                 .takingOwnershipOfDescriptors(input: nioInputFD, output: nioOutputFD)
@@ -376,8 +399,35 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
     }
 
     /// The frames the child emits, until EOF or `stop()`.
-    nonisolated public func frames() -> AsyncStream<[UInt8]> {
-        framesStream
+    nonisolated public func frames() -> ClientFrameSequence {
+        clientFrames.sequence
+    }
+
+    /// Whether the peer understands the best-effort `shutdown` extension.
+    ///
+    /// The child's stdio server exits on stdin EOF, so it can be asked to drain
+    /// in-flight work before the ladder runs.
+    public var supportsCooperativeShutdown: Bool { true }
+
+    /// The child's stderr, as a live line stream (newest-dropping).
+    ///
+    /// Single-consumer fan-out of the built-in SwiftSlash line pipeline; the
+    /// retained tail (`stderrTailSnapshot()`) remains available without a
+    /// consumer.
+    nonisolated public func stderrLines() -> AsyncStream<String> {
+        stderrStream
+    }
+
+    /// Builds the child environment: the caller's variables plus the
+    /// identity/trust plumbing the child's `StdioTransport` reads for access
+    /// gating (`MCP_ACCESS_LEVEL`, optional `MCP_CALLER_IDENT`).
+    private static func spawnEnvironment(_ configuration: Configuration) -> [String: String] {
+        var environment = configuration.environment
+        environment["MCP_ACCESS_LEVEL"] = String(configuration.trustLevel.rawValue)
+        if let identity = configuration.callerIdentity {
+            environment["MCP_CALLER_IDENT"] = identity
+        }
+        return environment
     }
 
     /// Runs the shutdown ladder: EOF on the child's stdin → grace → SIGTERM →

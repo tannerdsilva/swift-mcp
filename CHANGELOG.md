@@ -51,6 +51,19 @@ MCP-by-subprocess via SwiftSlash 5.0 bring-your-own data channels.
 - The subprocess reaper signals on cancellation (`run(cancellationSignal:)`),
   publishes child + reaper atomically, and releases the retained pipe fds and
   channel when the child exits on its own.
+- Client `frames()` is a backpressured `ClientFrameSequence` (high/low
+  watermark demand; never drops; both networked carriers pause peer reads).
+- Subprocess close is cooperative: a best-effort `shutdown` extension lets an
+  EOF-exit peer drain and exit cleanly with code 0 before the ladder runs
+  (unsupported peers sees `-32601`/timeout → EOF + ladder; EOF remains the
+  authoritative termination).
+- `StdioTransport` applies a harness-injected access level and identity
+  (`MCP_ACCESS_LEVEL` / `MCP_CALLER_IDENT`); `SubprocessClientTransport`
+  now takes `trustLevel` + `callerIdentity` so plugins get real access gates.
+  `MCPClient` is explicitly one-shot by design — with no network layer there
+  is nothing to retry.
+- `SubprocessClientTransport` exposes the child's stderr as a live line
+  stream (`stderrLines()`) via the built-in SwiftSlash pipeline.
 
 ### Fixed
 

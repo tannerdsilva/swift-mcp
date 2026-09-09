@@ -63,8 +63,8 @@ public final class TCPClientTransport: ClientTransport, @unchecked Sendable {
     private let eventLoopGroup: EventLoopGroup
     private let logger: Logger?
     private let oversizeErrorFrame: [UInt8]
-    private let framesStream: AsyncStream<[UInt8]>
-    private let framesContinuation: AsyncStream<[UInt8]>.Continuation
+    /// The backpressured producer/consumer halves of the frame stream.
+    private let clientFrames: ClientFrames
 
     /// Guards the runtime state below.
     private let stateLock = Mutex<()>(())
@@ -87,9 +87,7 @@ public final class TCPClientTransport: ClientTransport, @unchecked Sendable {
         self.logger = logger
         self.oversizeErrorFrame =
             (try? QuickJSON.encode(JSONRPCErrorResponse(id: .null, code: -32700, message: "Message too large"))) ?? []
-        var continuation: AsyncStream<[UInt8]>.Continuation!
-        self.framesStream = AsyncStream { continuation = $0 }
-        self.framesContinuation = continuation
+        self.clientFrames = ClientFrames()
     }
 
     /// The remote socket address the connection is bound to, once started.
@@ -117,10 +115,11 @@ public final class TCPClientTransport: ClientTransport, @unchecked Sendable {
 
         let bootstrap = ClientBootstrap(group: eventLoopGroup)
             .connectTimeout(configuration.connectTimeout)
-            .channelInitializer { [framesContinuation, maxMessageSize, oversizeErrorFrame, logger] channel in
+            .channelOption(ChannelOptions.autoRead, value: false)
+            .channelInitializer { [clientFrames, maxMessageSize, oversizeErrorFrame, logger] channel in
                 channel.pipeline.addHandlers(
                     MCPFrameCodec(maxMessageSize: maxMessageSize, oversizeErrorFrame: oversizeErrorFrame),
-                    ClientFrameBridge(continuation: framesContinuation, logger: logger)
+                    ClientFrameBridge(source: clientFrames.source, demand: clientFrames.demand, logger: logger)
                 )
             }
 
@@ -161,8 +160,8 @@ public final class TCPClientTransport: ClientTransport, @unchecked Sendable {
     }
 
     /// The frames the server emits, until EOF or `stop()`.
-    nonisolated public func frames() -> AsyncStream<[UInt8]> {
-        framesStream
+    nonisolated public func frames() -> ClientFrameSequence {
+        clientFrames.sequence
     }
 
     /// Closes the connection. The frames stream finishes; in-flight requests

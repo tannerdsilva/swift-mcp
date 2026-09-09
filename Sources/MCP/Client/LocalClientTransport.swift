@@ -52,8 +52,8 @@ public struct LocalClientTransport<Dispatcher: MCPToolDispatcher>: ClientTranspo
     }
 
     private let router: MCPMessageRouter
-    private let framesStream: AsyncStream<[UInt8]>
-    private let framesContinuation: AsyncStream<[UInt8]>.Continuation
+    /// The backpressured producer/consumer halves of the frame stream.
+    private let clientFrames: ClientFrames
 
     /// Creates a network-free carrier over a compile-time tool dispatcher.
     ///
@@ -73,9 +73,7 @@ public struct LocalClientTransport<Dispatcher: MCPToolDispatcher>: ClientTranspo
             logger: logger ?? Logger(label: "mcp.local"),
             dispatcher: dispatcher
         )
-        var continuation: AsyncStream<[UInt8]>.Continuation!
-        self.framesStream = AsyncStream { continuation = $0 }
-        self.framesContinuation = continuation
+        self.clientFrames = ClientFrames()
     }
 
     // MARK: - ClientTransport
@@ -97,18 +95,20 @@ public struct LocalClientTransport<Dispatcher: MCPToolDispatcher>: ClientTranspo
             guard let response = try? await router.route(bytes, caller: Self.caller) else {
                 return
             }
-            framesContinuation.yield(response)
+            // in-process: yield can only fail after termination (dropped);
+            // harmless to ignore — the client is closing or closed.
+            _ = clientFrames.source.yield(response)
         }
     }
 
     /// The frame stream the client's read loop consumes. Responses accompany
     /// each `sendFrame`; the stream never carries unsolicited data.
-    nonisolated public func frames() -> AsyncStream<[UInt8]> {
-        framesStream
+    nonisolated public func frames() -> ClientFrameSequence {
+        clientFrames.sequence
     }
 
     /// Finished the frame stream so the client ends its read loop.
     public func stop() async throws {
-        framesContinuation.finish()
+        clientFrames.source.finish()
     }
 }

@@ -7,6 +7,10 @@ import NIOPosix
 import SwiftSlash
 import Synchronization
 
+@Suite(.serialized)
+struct MCPClientTests {
+
+
 // MARK: - Fixture location
 
 /// Locates the built `MCPFixtureServer` binary.
@@ -118,8 +122,8 @@ private func decodedJSONValue(_ bytes: [UInt8]) -> Any? {
 // (cwd=/tmp/mcp-interop; `pip install mcp`; control_server.py spawns
 // `mcp.server.mcpserver.MCPServer` over stdio). Not committed because the venv
 // path is machine-local. Both directions verified green after the Sep 2026
-// adversarial fix cycle: SDK client → fixture server, and our client → SDK
-// server.
+// adversarial + stdio-parity cycles: SDK client → fixture server, and our
+// client → SDK server (including the cooperative-close `-32601` fallback).
 
 @Test("MCPClient round-trips initialize/list/call over a spawned server")
 func clientRoundTripOverSubprocess() async throws {
@@ -132,7 +136,7 @@ func clientRoundTripOverSubprocess() async throws {
     #expect(await client.negotiatedVersion() == "2025-11-25")
 
     let tools = try await client.listTools()
-    #expect(tools.map(\.name) == ["echo", "add", "slow"])
+    #expect(tools.map(\.name) == ["echo", "add", "slow", "admin"])
     if let error = tools.first(where: { $0.name == "echo" })?.description {
         #expect(error == "Echo a message back verbatim")
     }
@@ -324,7 +328,7 @@ func tcpClientConnectFailure() async throws {
         .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
         .childChannelInitializer { $0.pipeline.addHandler(EchoIgnoreHandler()) }
     let probeChannel = try await probe.bind(host: "127.0.0.1", port: 0).get()
-    let port = try await probeChannel.localAddress!.port!
+    let port = probeChannel.localAddress!.port!
     try await probeChannel.close()
 
     let transport = TCPClientTransport(
@@ -338,7 +342,7 @@ func tcpClientConnectFailure() async throws {
 }
 
 /// Minimal no-op channel handler for the connect-failure probe listener.
-private final class EchoIgnoreHandler: ChannelInboundHandler {
+private final class EchoIgnoreHandler: ChannelInboundHandler, Sendable {
     typealias InboundIn = ByteBuffer
 }
 
@@ -471,6 +475,85 @@ func localClientCallTimeout() async throws {
 }
 
 // MARK: - Transport lifecycle (ladder + processes)
+
+@Test("Subprocess transport closes cooperatively and the child exits cleanly")
+func subprocessCooperativeShutdownExitsCleanly() async throws {
+    let transport = SubprocessClientTransport(configuration: .init(executable: try fixtureServerPath()))
+    let client = MCPClient(transport: transport)
+    try await client.connect()
+    _ = try await client.listTools()
+
+    // the cooperative `shutdown` extension: the fixture drains (nothing in
+    // flight) and acks; the child then exits cleanly on EOF. the child exit
+    // code is 0 and the whole close is far under the signal-ladder grace —
+    // proving no escalation happened.
+    let started = ContinuousClock.now
+    await client.close()
+    let elapsed = ContinuousClock.now - started
+    #expect(elapsed < .milliseconds(1500))
+    guard case .code(let code)? = transport.childExit else {
+        Issue.record("expected code-0 exit, got \(String(describing: transport.childExit))")
+        return
+    }
+    #expect(code == 0)
+}
+
+@Test("Subprocess plugin access gates are driven by the declared trust level")
+func subprocessAccessGateFromTrustLevel() async throws {
+    // the harness declares the plugin's trust; the child's server honors it
+    // (identical gates a networked caller gets). trust .public must hide and
+    // deny the fixture's admin tool; .admin must expose and allow it. the env
+    // is scoped to the child — no process-global mutation, parallel-safe.
+    let publicTransport = SubprocessClientTransport(
+        configuration: .init(executable: try fixtureServerPath(), trustLevel: .public)
+    )
+    let publicClient = MCPClient(transport: publicTransport)
+    try await publicClient.connect()
+    let publicTools = try await publicClient.listTools()
+    #expect(!publicTools.contains { $0.name == "admin" })
+    await #expect(throws: MCPClientError.self) {
+        _ = try await publicClient.callTool("admin", arguments: [:])
+    }
+    await publicClient.close()
+
+    let adminTransport = SubprocessClientTransport(
+        configuration: .init(
+            executable: try fixtureServerPath(),
+            trustLevel: .admin,
+            callerIdentity: "harness"
+        )
+    )
+    let adminClient = MCPClient(transport: adminTransport)
+    try await adminClient.connect()
+    let adminTools = try await adminClient.listTools()
+    #expect(adminTools.contains { $0.name == "admin" })
+    let result = try await adminClient.callTool("admin", arguments: ["message": "x"])
+    guard case .text(let text) = result.content.first else {
+        Issue.record("expected text content, got \(result.content)")
+        return
+    }
+    #expect(text == "admin:x")
+    await adminClient.close()
+}
+
+@Test("Subprocess transport streams live stderr lines via the built-in pipeline")
+func subprocessStderrStreamDelivers() async throws {
+    let transport = SubprocessClientTransport(
+        configuration: .init(executable: "/bin/sh", arguments: ["-c", "echo live-stderr-line >&2; exit 0"])
+    )
+    try await transport.start()
+
+    var iterator = transport.stderrLines().makeAsyncIterator()
+    let deadline = ContinuousClock.now + .seconds(3)
+    var received: String?
+    while ContinuousClock.now < deadline {
+        if let line = await iterator.next() {
+            received = line
+            break
+        }
+    }
+    #expect(received?.contains("live-stderr-line") == true)
+}
 
 /// Counts the calling process's open file descriptors (macOS /dev/fd view).
 private func openFDCount() -> Int {
@@ -631,4 +714,5 @@ func subprocessStderrTail() async throws {
     #expect(transport.stderrTailSnapshot().contains(where: { $0.contains("diagnostics-to-stderr") }))
 
     try await transport.stop()
+}
 }

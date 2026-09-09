@@ -267,6 +267,13 @@ final class MCPMessageRouter: @unchecked Sendable {
             response = try await handleInitialize(request: params, id: requestID)
         case .ping:
             response = makeSuccessResponse(id: requestID, result: [String: AnyCodable]())
+        case .shutdown:
+            // cooperative shutdown (best-effort extension, not part of the MCP
+            // spec): the actor processed every request before this one, so the
+            // acknowledgement IS the drain guarantee — the caller then sends
+            // stdin EOF and this process exits cleanly. peers that do not know
+            // the method answer -32601 and both sides keep the EOF path.
+            response = makeSuccessResponse(id: requestID, result: [String: AnyCodable]())
         case .toolsList:
             response = try await handleToolsList(id: requestID, caller: caller)
         case .toolsCall:

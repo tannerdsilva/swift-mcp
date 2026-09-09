@@ -172,7 +172,18 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
             throw MCPError.transportError("stdio: unable to duplicate stdout descriptor (\(String(cString: strerror(errno))))")
         }
 
-        let caller = MCPCallerInfo(sourceAddress: "stdio", accessLevel: .root)
+        // The caller identity a spawned server applies. A harness may inject an
+        // access level and identity over the environment (see
+        // `SubprocessClientTransport.Configuration.trustLevel` /
+        // `callerIdentity`): the child's server then applies the same access
+        // gates a networked caller would. Absent the variables, a stdio caller
+        // is `.root` as before.
+        let accessLevel = Self.environmentCallerAccessLevel()
+        let callerIdentity = Self.environmentString("MCP_CALLER_IDENT")
+        let caller = MCPCallerInfo(
+            sourceAddress: callerIdentity.map { "stdio:\($0)" } ?? "stdio",
+            accessLevel: accessLevel
+        )
 
         let bootstrap = NIOPipeBootstrap(group: eventLoopGroup)
             // a client EOF on stdin half-closes the channel instead of killing
@@ -236,5 +247,29 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
             return channel
         }
         try await activeChannel?.close(mode: .all)
+    }
+}
+
+// MARK: - Environment-driven caller identity
+
+extension StdioTransport {
+    /// The harness-injected caller access level (`MCP_ACCESS_LEVEL`, the raw
+    /// `AccessLevel` integer), defaulting to `.root`.
+    ///
+    /// Set by `SubprocessClientTransport` from `Configuration.trustLevel`
+    /// when it spawns the child, so a plugin server applies the same access
+    /// gates a networked caller would.
+    static func environmentCallerAccessLevel() -> AccessLevel {
+        guard let raw = Self.environmentString("MCP_ACCESS_LEVEL"), let value = Int(raw) else {
+            return .root
+        }
+        return AccessLevel(rawValue: value) ?? .root
+    }
+
+    /// Reads an environment variable, or `nil` when absent or empty.
+    static func environmentString(_ name: String) -> String? {
+        guard let pointer = name.withCString({ getenv($0) }) else { return nil }
+        let value = String(cString: pointer)
+        return value.isEmpty ? nil : value
     }
 }

@@ -52,10 +52,21 @@ struct Slow {
     }
 }
 
+@MCPCommand(description: "Admin-gated echo, used to exercise plugin trust levels", name: "admin", requiredAccess: .admin)
+struct AdminEcho {
+    @Argument(description: "Message to echo")
+    var message: String = ""
+
+    func run() async throws -> String {
+        "admin:\(message)"
+    }
+}
+
 @main
 @MCPApplication(name: "mcp-fixture", version: "1.0.0")
 struct MCPFixtureServer {
     @Tool var echo = Echo()
     @Tool var add = Add()
     @Tool var slow = Slow()
+    @Tool var admin = AdminEcho()
 }

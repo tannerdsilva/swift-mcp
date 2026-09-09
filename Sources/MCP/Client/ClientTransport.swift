@@ -104,8 +104,8 @@ final class ResumeOnce: @unchecked Sendable {
 ///   with real backpressure into the medium.
 /// - `frames()` yields every frame the peer emits, until EOF or `stop()`.
 /// - `stop()` terminates the connection. For the subprocess carrier this runs
-///   the shutdown ladder: EOF on the child's stdin → grace → SIGTERM → SIGKILL,
-///   with the reap guaranteed on every rung.
+///   the shutdown ladder: (cooperative `shutdown` →) EOF on the child's stdin
+///   → grace → SIGTERM → SIGKILL, with the reap guaranteed on every rung.
 public protocol ClientTransport: Sendable {
     /// Brings the transport up for the first time.
     ///
@@ -121,11 +121,26 @@ public protocol ClientTransport: Sendable {
     func sendFrame(_ bytes: [UInt8]) async throws
 
     /// Frames emitted by the peer, in arrival order, until EOF or `stop()`.
-    nonisolated func frames() -> AsyncStream<[UInt8]>
+    ///
+    /// Backpressured: the carrier pauses the peer when this stream's consumer
+    /// is slow; frames are never dropped.
+    nonisolated func frames() -> ClientFrameSequence
+
+    /// Whether the peer understands the best-effort `shutdown` extension.
+    ///
+    /// Stdio-style peers (a server that exits when its stdin hits EOF) can be
+    /// asked to drain in-flight work before the change; networked/process-free
+    /// carriers have no such handshake. Default `false`.
+    var supportsCooperativeShutdown: Bool { get }
 
     /// Terminates the connection.
     ///
     /// must make `frames()` end and release the medium (for the subprocess
     /// carrier: run the shutdown ladder and reap the child).
     func stop() async throws
+}
+
+extension ClientTransport {
+    /// Non-cooperative by default; the subprocess carrier opts in.
+    public var supportsCooperativeShutdown: Bool { false }
 }

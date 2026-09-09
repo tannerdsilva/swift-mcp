@@ -47,6 +47,10 @@ public actor MCPClient {
         public var negotiationTimeout: Duration = .seconds(10)
         /// Per-request deadline. Defaults to 120s.
         public var callTimeout: Duration = .seconds(120)
+        /// How long `close()` waits for a cooperative `shutdown` peer to drain
+        /// in-flight work before falling back to EOF and the signal ladder.
+        /// Defaults to 5s.
+        public var shutdownCooperationTimeout: Duration = .seconds(5)
         /// The `clientInfo.name` sent during `initialize`.
         public var clientName: String = "mcp-swift-client"
         /// The `clientInfo.version` sent during `initialize`.
@@ -164,15 +168,43 @@ public actor MCPClient {
 
     /// Closes the connection.
     ///
-    /// Runs the carrier's shutdown ladder (subprocess: EOF on the child's
-    /// stdin → grace → SIGTERM → SIGKILL, with the reap guaranteed), fails
-    /// every in-flight request with `connectionClosed`, and moves the client
-    /// to `disconnected`.
+    /// For a peer that understands the best-effort `shutdown` extension
+    /// (stdio-style servers), the client first asks it to drain in-flight work
+    /// and wind down — the common case then exits cleanly with code 0 instead
+    /// of racing the ladder. Unsupported peers and timeouts fall back to the
+    /// carrier's termination (subprocess: EOF on the child's stdin → grace →
+    /// SIGTERM → SIGKILL, with the reap guaranteed). Finally every in-flight
+    /// request fails with `connectionClosed` and the client moves to
+    /// `disconnected`.
     public func close() async {
         guard state != .idle, state != .disconnected else { return }
+
+        // cooperative shutdown first, while still .ready: the peer drains what
+        // it has and ack; then EOF exits it cleanly.
+        if transport.supportsCooperativeShutdown, state == .ready {
+            await requestShutdown()
+        }
+
         state = .shuttingDown
         try? await transport.stop()
         await handleTransportClosed()
+    }
+
+    /// Best-effort: asks the peer to drain and wind down.
+    ///
+    /// A peer that does not know the extension answers `-32601` (ignored) and a
+    /// stalled peer times out (ignored) — EOF and the carrier's ladder remain
+    /// the guaranteed path, so a cooperative close can never wedge the client.
+    private func requestShutdown() async {
+        do {
+            _ = try await requestRaw(
+                method: "shutdown",
+                params: nil,
+                timeout: configuration.shutdownCooperationTimeout
+            )
+        } catch {
+            // deliberately ignored: unsupported (-32601), timed out, or dropped.
+        }
     }
 
     /// Suspends until the connection drops (EOF or `close()`).

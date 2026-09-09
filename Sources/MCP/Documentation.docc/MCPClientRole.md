@@ -55,7 +55,19 @@ idle → spawning → handshake → ready → shuttingDown → disconnected
   (the server reports `isError`) returns an ``MCPToolResult`` with `isError`
   set; a JSON-RPC-level error throws
   ``MCPClientError/remoteError(code:message:)``.
-- **`close()`** runs the carrier's shutdown and moves to `disconnected`.
+- **`close()`** asks an EOF-exit peer to wind down cooperatively (the
+  best-effort `shutdown` extension — unsupported peers fall back to EOF and
+  the signal ladder), then runs the carrier's termination and moves to
+  `disconnected`.
+
+## Lifecycle philosophy: one shot, by design
+
+`MCPClient` is deliberately **not** reconnecting. With no network layer there
+is no transient failure to retry: a subprocess plugin either works or it
+doesn't, and after EOF/close the client is `disconnected` for good. A host
+that wants a crashed plugin back builds a fresh client; the in-process test
+suite treats respawn as a new connection, not a recovery. (The client itself
+is cheap — the connection, not the process, is the disposable unit.)
 
 Every request is correlated by JSON-RPC id through an actor-owned in-flight
 table (out-of-order replies are safe) and carries a deadline
@@ -78,6 +90,11 @@ frames until EOF), and `stop()`.
 The actor is deliberately carrier-agnostic: the same state machine, timeouts,
 and catalog logic run identically over all three, so network-free MCP is a
 configuration, not a fork.
+
+`ClientTransport.frames()` returns a backpressured ``ClientFrameSequence``:
+the carrier pauses reads at a high watermark and resumes below a low one, so a
+slow consumer backpressures the peer instead of buffering without bound, and
+frames are never dropped.
 
 ## Serving a plugin from a host `ServiceGroup`
 

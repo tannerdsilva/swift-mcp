@@ -36,20 +36,47 @@ stderr                                   SwiftSlash built-in line stream → log
 
 ## The shutdown ladder
 
-MCP over stdio has no shutdown RPC — **EOF on the child's stdin is the
-shutdown signal**. `SubprocessClientTransport.stop()` runs a strictly-ordered
-ladder, and SwiftSlash guarantees the reap on every rung:
+MCP over stdio has no spec-defined shutdown RPC — **EOF on the child's stdin
+is the shutdown signal**. Swift-mcp adds a best-effort cooperative rung ahead
+of the guaranteed ladder:
 
 ```
-1. close the transport's stdin write end + the channel  → child's stdin EOF
-2. wait a grace period (default 2s)                     → clean exit wins
-3. SIGTERM to the whole process group (kill(-pid))      → descendants die too
-4. SIGKILL to the process group                         → guaranteed reap
+0. ask the child to drain and wind down (`shutdown`, our extension)
+1. close the transport's stdin write end + the channel     → child's stdin EOF
+2. wait a grace period (default 2s)                        → clean exit wins
+3. SIGTERM to the whole process group (kill(-pid))         → descendants die too
+4. SIGKILL to the process group                            → guaranteed reap
 ```
+
+`shutdown` is a **legal JSON-RPC extension, not an MCP-spec method** — by the
+time the child's message actor processes it, everything before it has been
+handled, so the acknowledgement *is* the drain guarantee, and the child then
+exits cleanly on the EOF that follows. Sending it is always best-effort: a
+peer that does not know the method answers `-32601` (ignored) and a stalled
+peer times out (ignored), so a cooperative close can never wedge the client
+and third-party peers observe byte-identical EOF behavior. The common case —
+an idle or quick server — now exits with code 0 instead of racing the ladder.
 
 The transport owns the parent's stdin-write fd itself (NIO gets a duplicate),
 so rung 1 is deterministic: an EOF arrives the instant the fd closes, not
 whenever NIO happens to release its copy.
+
+## Plugin identity
+
+A subprocess caller used to be `.root` by construction — the least-trusted
+runtime context ran maximally privileged. The carrier now injects the
+**harness-declared trust level** (`Configuration.trustLevel`, plus an optional
+`Configuration.callerIdentity`) into the child over the environment; the
+child's `StdioTransport` reads it, so plugins get `tools/list` filtering and
+call gates exactly like a networked caller. Absent the variables, a stdio
+caller is `.root` as before.
+
+## Frame backpressure
+
+Client frame intake is demand-driven: the frame stream pauses reads at a high
+watermark and resumes below a low watermark, so a chatty or hostile peer
+cannot grow client memory without bound — and frames are never dropped
+(demand pauses the producer, it does not discard).
 
 ## PITFALL: `FD_CLOEXEC` on every parent pipe end
 

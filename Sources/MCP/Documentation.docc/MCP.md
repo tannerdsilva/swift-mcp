@@ -65,6 +65,7 @@ the wire: it serves tools and consumes them as a client.
 - ``MCPClient``
 - ``MCPClientService``
 - ``MCPClientError``
+- ``ClientFrameSequence``
 - ``SubprocessClientTransport``
 - ``TCPClientTransport``
 - ``LocalClientTransport``

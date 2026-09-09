@@ -178,6 +178,7 @@ enum JSONRPCID: Codable, Sendable, Hashable {
 enum MCPMethod: String, Sendable {
     case initialize = "initialize"
     case ping = "ping"
+    case shutdown = "shutdown"
     case toolsList = "tools/list"
     case toolsCall = "tools/call"
     case resourcesList = "resources/list"

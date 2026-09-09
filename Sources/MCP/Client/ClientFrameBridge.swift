@@ -12,38 +12,62 @@
 import Logging
 import NIOCore
 
-/// The frame-dispatch `ChannelInboundHandler` for client carriers: yields each
-/// framed payload into the carrier's `AsyncStream` and finishes the stream on
-/// channel close.
+/// The frame→producer bridge for client carriers: yields each framed payload
+/// to the carrier's backpressured ``ClientFrameSequence`` and drives channel
+/// reads by demand (the `NIOAsyncChannel` pattern).
 ///
-/// Shared by `SubprocessClientTransport` (NIO pipe channel) and
-/// `TCPClientTransport` (NIO socket channel) — the client read loop consumes
-/// the same stream shape regardless of carrier.
+/// With the channel's `autoRead` disabled by the carrier bootstraps, reads are
+/// armed here (`channelActive`) and by the producer's `produceMore` demand — a
+/// slow consumer naturally pauses the peer instead of growing memory, and
+/// frames are never dropped.
 ///
 /// - Note: `Sendable` because `addHandlers` requires it; every stored property
 ///   is immutable and `Sendable`.
 final class ClientFrameBridge: ChannelInboundHandler, Sendable {
     typealias InboundIn = [UInt8]
 
-    private let continuation: AsyncStream<[UInt8]>.Continuation
+    private let source: ClientFramesProducer.Source
+    private let demand: FrameDemand
     private let logger: Logger?
 
-    init(continuation: AsyncStream<[UInt8]>.Continuation, logger: Logger?) {
-        self.continuation = continuation
+    init(
+        source: ClientFramesProducer.Source,
+        demand: FrameDemand,
+        logger: Logger?
+    ) {
+        self.source = source
+        self.demand = demand
         self.logger = logger
     }
 
+    func channelActive(context: ChannelHandlerContext) {
+        demand.attach(context.channel)
+        // autoRead is disabled at the carrier bootstraps; this arms the first
+        // read. subsequent reads are demand-driven through yield()/produceMore.
+        context.read()
+    }
+
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        continuation.yield(unwrapInboundIn(data))
+        let frame = unwrapInboundIn(data)
+        switch source.yield(frame) {
+        case .produceMore:
+            // demand holds: keep reading.
+            context.read()
+        case .stopProducing, .dropped:
+            // backpressured (or terminated): pause; produceMore() re-arms.
+            break
+        }
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        continuation.finish()
+        demand.detach()
+        source.finish()
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         logger?.warning("client channel error: \(error)")
-        continuation.finish()
+        demand.detach()
+        source.finish()
         context.close(promise: nil)
     }
 }

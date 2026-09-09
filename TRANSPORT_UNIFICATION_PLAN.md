@@ -266,13 +266,16 @@ Ownership notes (implemented; matches the v5 BYO contract, verified in source):
   line-split `AsyncSequence` → `Logger` at `.debug`/`.trace` plus a retained tail for crash
   diagnostics, unchanged from the plan's stderr contract. Zero extra NIO plumbing.
 
-Shutdown ladder (rung 1 changes mechanics, semantics identical to the plan's §6.5):
+Shutdown ladder (rung 0 is the best-effort cooperative extension added in the
+stdio-parity pass; rungs 1-4 are the guaranteed path and always terminate):
 
 ```
-1. try await channel.close()          // NIO closes parentWrite → child stdin EOF
-2. await run() with shutdownGrace       // server StdioTransport exits 0; Exit.code(0)
-3. timeout → try child.signal(SIGTERM)  // negated-pid group signal, SwiftSlash-native
-4. still alive → try child.signal(SIGKILL)
+0. ask the peer to drain and wind down (`shutdown`, our extension — a peer
+   that doesn't know it answers -32601, ignored; EOF stays authoritative)
+1. close the transport's stdin write end + channel  // deterministic stdin EOF
+2. await run() with shutdownGrace                   // server exits; Exit.code(0)
+3. timeout → SIGTERM to the process group (kill(-pid))
+4. still alive → SIGKILL
    reap guaranteed on every rung (SwiftSlash run() always reaps).
 ```
 
