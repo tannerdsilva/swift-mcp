@@ -89,4 +89,50 @@ struct MCPClientCancellationTests {
 
         await client.close()
     }
+
+    @Test("double-cancel yields a single CancellationError")
+    func doubleCancelResolvesExactlyOnce() async throws {
+        let transport = LocalClientTransport(dispatcher: MCPClientTests.LocalAppDispatcher())
+        let client = MCPClient(transport: transport)
+
+        try await client.connect()
+
+        let call = Task { try await client.callTool("slow", arguments: [:]) }
+        try await Task.sleep(for: .milliseconds(300))
+        call.cancel()
+        call.cancel()   // second cancel must be a no-op, not a double-resume
+
+        do {
+            _ = try await call.value
+            Issue.record("expected CancellationError, got a result")
+        } catch is CancellationError {
+            // expected: a single CancellationError, exactly once
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        // exactly-once, and the client is still usable afterwards.
+        try await client.ping()
+        await client.close()
+    }
+
+    @Test("cancelling after completion leaves the result intact")
+    func cancelAfterCompletionIsANoOp() async throws {
+        let transport = LocalClientTransport(dispatcher: MCPClientTests.LocalAppDispatcher())
+        let client = MCPClient(transport: transport)
+
+        try await client.connect()
+
+        let call = Task { try await client.callTool("greet", arguments: ["name": "Taylor"]) }
+        let result = try await call.value
+        #expect(result.flattenedText == "Hello, Taylor!")
+
+        // cancel fires after the operation already completed — the handler is
+        // unregistered, so this must be a harmless no-op.
+        call.cancel()
+        let again = try await client.callTool("greet", arguments: ["name": "Robin"])
+        #expect(again.flattenedText == "Hello, Robin!")
+
+        await client.close()
+    }
 }
