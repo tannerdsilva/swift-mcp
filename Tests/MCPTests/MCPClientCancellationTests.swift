@@ -34,8 +34,11 @@ struct MCPClientCancellationTests {
         call.cancel()
 
         let started = ContinuousClock.now
-        await #expect(throws: CancellationError.self) {
+        do {
             _ = try await call.value
+            Issue.record("expected CancellationError, got a result")
+        } catch is CancellationError {
+            // expected: the caller's task was cancelled
         }
         // prompt: the caller must not wait out the tool's 5s sleep
         #expect(ContinuousClock.now - started < .seconds(3))
@@ -51,5 +54,39 @@ struct MCPClientCancellationTests {
 
         await client.close()
         #expect(await client.currentState() == .disconnected)
+    }
+
+    @Test("cancelling a network-free call also stops the local invocation")
+    func localCancelStopsLocalInvocation() async throws {
+        // the local carrier is deliberately exercised too: it answers inside
+        // sendFrame (register-before-send ordering) and drives the same router,
+        // so cancellation must work with zero bytes and zero processes.
+        let transport = LocalClientTransport(dispatcher: MCPClientTests.LocalAppDispatcher())
+        let client = MCPClient(transport: transport)
+
+        try await client.connect()
+        _ = try await client.listTools()
+
+        let call = Task { try await client.callTool("slow", arguments: [:]) }
+        try await Task.sleep(for: .milliseconds(300))
+        call.cancel()
+
+        let started = ContinuousClock.now
+        do {
+            _ = try await call.value
+            Issue.record("expected CancellationError, got a result")
+        } catch is CancellationError {
+            // expected: the caller's task was cancelled
+        }
+        #expect(ContinuousClock.now - started < .seconds(3))
+
+        // the 30s slow invocation was interrupted, not left running: a follow-up
+        // call completes promptly instead of queuing behind it.
+        let quickStarted = ContinuousClock.now
+        let greet = try await client.callTool("greet", arguments: ["name": "Taylor"])
+        #expect(greet.flattenedText == "Hello, Taylor!")
+        #expect(ContinuousClock.now - quickStarted < .seconds(5))
+
+        await client.close()
     }
 }

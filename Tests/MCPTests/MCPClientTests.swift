@@ -525,7 +525,7 @@ private final class EchoIgnoreHandler: ChannelInboundHandler, Sendable {
 /// `@MCPApplication` macro generates: a compile-time catalog, access gates,
 /// and typed dispatch — here over the macro-built `Greet` tool plus a slow
 /// probe.
-private struct LocalAppDispatcher: MCPToolDispatcher {
+struct LocalAppDispatcher: MCPToolDispatcher {
     func toolCatalog(for callerAccessLevel: AccessLevel) -> [MCPToolDescriptor] {
         [
             MCPToolDescriptor(name: "greet", description: "Greet someone by name", parameters: Greet.discoverParameters()),
