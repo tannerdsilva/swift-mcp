@@ -135,4 +135,63 @@ struct MCPClientCancellationTests {
 
         await client.close()
     }
+
+    @Test("cancel racing the timeout resolves exactly once")
+    func cancelRacingTimeoutResolvesExactlyOnce() async throws {
+        var configuration = MCPClient.ClientConfiguration()
+        configuration.callTimeout = .milliseconds(250)
+        let transport = LocalClientTransport(dispatcher: MCPClientTests.LocalAppDispatcher())
+        let client = MCPClient(transport: transport, configuration: configuration)
+
+        try await client.connect()
+
+        let call = Task { try await client.callTool("slow", arguments: [:]) }
+        // cancel while the timeout reaper is still in flight — either resolver
+        // may win, but exactly one may resolve the waiter.
+        try await Task.sleep(for: .milliseconds(50))
+        call.cancel()
+
+        do {
+            _ = try await call.value
+            Issue.record("expected a cancellation or timeout error")
+        } catch is CancellationError {
+            // expected: the caller's cancel won
+        } catch MCPClientError.callTimeout {
+            // expected: the deadline reaper won
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        // the client remains fully usable regardless of which resolver won.
+        try await client.ping()
+        await client.close()
+    }
+
+    @Test("cancelling one call leaves a concurrent call untouched")
+    func cancellingOneCallLeavesSiblingUntouched() async throws {
+        let transport = LocalClientTransport(dispatcher: MCPClientTests.LocalAppDispatcher())
+        let client = MCPClient(transport: transport)
+
+        try await client.connect()
+
+        let slow = Task { try await client.callTool("slow", arguments: [:]) }
+        let fast = Task { try await client.callTool("greet", arguments: ["name": "Taylor"]) }
+        try await Task.sleep(for: .milliseconds(300))
+        slow.cancel()
+
+        // the sibling completes with its own result, undisturbed by the cancel.
+        let started = ContinuousClock.now
+        let result = try await fast.value
+        #expect(result.flattenedText == "Hello, Taylor!")
+        #expect(ContinuousClock.now - started < .seconds(5))
+
+        do {
+            _ = try await slow.value
+            Issue.record("expected CancellationError, got a result")
+        } catch is CancellationError {
+            // expected
+        }
+
+        await client.close()
+    }
 }
