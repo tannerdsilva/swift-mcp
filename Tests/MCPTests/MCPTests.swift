@@ -316,10 +316,10 @@ func variedTypesInjection() async throws {
 @Test("MCPApplication compiles and dispatches through generated callTool")
 func mcpApplicationDispatch() async throws {
     let app = AppServer()
-    let greetResult = try await app.callTool(.greet, arguments: ["name": "Skeptic"])
+    let greetResult = try await app.callTool(.greet, arguments: ["name": "Ava"])
     #expect(greetResult.isError == false)
     if case .text(let text) = greetResult.content[0] {
-        #expect(text == "Hello, Skeptic!")
+        #expect(text == "Hello, Ava!")
     } else {
         Issue.record("Expected text content")
     }
@@ -1394,11 +1394,11 @@ func dispatcherSurfaceMethods() async throws {
     let unknown = try await app.callTool(named: "missing", arguments: [:], context: MCPContext(arguments: [:]))
     #expect(unknown == nil)
 
-    let args = ["name": "Skeptic"]
+    let args = ["name": "Ava"]
     let result = try await app.callTool(named: "greet", arguments: args, context: MCPContext(arguments: args))
     #expect(result?.isError == false)
     if case .text(let text) = result?.content[0] {
-        #expect(text == "Hello, Skeptic!")
+        #expect(text == "Hello, Ava!")
     } else {
         Issue.record("Expected text content")
     }
@@ -2592,7 +2592,7 @@ func mcpCommandVoidRunInvocation() async throws {
     }
 }
 
-// MARK: - Skeptic probe: fractional JSON-RPC ids
+// MARK: - Fractional JSON-RPC request id round trip
 
 @Test("Fractional JSON-RPC request ids are echoed (spec: ids may be any Number)")
 func fractionalRequestIDIsEchoed() async throws {
@@ -2617,7 +2617,7 @@ func fractionalRequestIDIsEchoed() async throws {
     #expect(response?["result"] != nil)
 }
 
-// MARK: - Skeptic probe: instance-tool access enforcement
+// MARK: - Instance-tool access enforcement
 
 /// A transport that delivers all messages to the handler with a `.public` caller.
 final class PublicCallerTransport: MCPTransport, @unchecked Sendable {
@@ -2675,7 +2675,7 @@ struct AdminInstanceTool: MCPTool {
     }
 }
 
-// MARK: - Skeptic findings: extension run(), builder array literal, string-id round trip
+// MARK: - Extension run(), builder array literal, string-id round trip
 
 @MCPCommand(description: "Extension-run probe")
 struct ExtRunTool {

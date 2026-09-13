@@ -25,7 +25,7 @@
   child scheduling is unreliable in strict-concurrency builds — timeouts use two
   unstructured `Task`s + the `ResumeOnce` Mutex gate; the frame codec size cap is
   per-frame (guarded before emitting each complete line).
-- **Adversarial pass (Sep 2026, `software-skeptic`):** three real defects found and fixed —
+- **Adversarial review pass (Sep 2026):** three real defects found and fixed —
   (A) the EOF path leaked the retained pipe fds plus the NIO channel (fixed: `childDidExit`
   releases fds, clears the process handle, and closes the channel; regression test measures
   zero per-session fd growth), (B) `start()` failure paths could hang forever (cancelling a
