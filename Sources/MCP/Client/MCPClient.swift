@@ -272,7 +272,20 @@ public actor MCPClient {
             error: duringHandshake ? .negotiationTimeout : .callTimeout
         )
         try await transport.sendFrame(frame)
-        return try await responseTask.value
+        // Task cancellation of the caller aborts the call: the in-flight entry
+        // is resolved with CancellationError and the peer is told its
+        // invocation is no longer awaited, so the remote tool stops at its
+        // next cooperative suspend point instead of running on with the
+        // caller's identity. The registered entry and the response await race
+        // through the actor's in-flight table (removeValue is exclusive), so
+        // a late reply, a timeout, or a concurrent cancel are all exactly-once.
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await responseTask.value
+        } onCancel: {
+            responseTask.cancel()
+            Task { await self.cancelInFlight(id) }
+        }
     }
 
     /// Creates the in-flight waiter for `id` and its deadline reaper.
@@ -313,6 +326,26 @@ public actor MCPClient {
         // (the connection may already be gone) and never delays the timeout
         // report above.
         guard error == .callTimeout else { return }
+        await sendCancelledNotification(id)
+    }
+
+    /// Cancels an in-flight request: resolves its waiter with
+    /// `CancellationError` and best-effort notifies the peer.
+    ///
+    /// Wired to task cancellation of the caller via
+    /// `withTaskCancellationHandler`. Mirrors ``expireInFlight`` — the
+    /// `removeValue` gate is the exclusive exactly-once arbitration across the
+    /// response path, the timeout reaper, transport close, and here.
+    private func cancelInFlight(_ id: JSONRPCID) async {
+        guard let entry = inFlight.removeValue(forKey: id) else { return }
+        entry.continuation.resume(throwing: CancellationError())
+        await sendCancelledNotification(id)
+    }
+
+    /// Sends a best-effort `notifications/cancelled` for a request id the
+    /// client no longer awaits. Ignored on failure (the connection may already
+    /// be gone) and never delays the caller's resolution.
+    private func sendCancelledNotification(_ id: JSONRPCID) async {
         let frame = try? QuickJSON.encode(JSONRPCNotification(
             method: "notifications/cancelled",
             params: ["requestId": AnyCodable(id.wireValue)]
