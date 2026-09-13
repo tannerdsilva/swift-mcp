@@ -175,9 +175,22 @@ JSON-RPC requires a response to every request, so the server never hangs a calle
 
 ### notifications/cancelled
 
-Sent by the client to cancel a pending request. Handled like
-`notifications/initialized`: no response for the notification form, and an empty
-success response when a client sends it as a request with an `id`.
+Sent by the client to cancel a pending request. The server routes it to the
+in-flight `tools/call` invocation for that request id and cancels its task: the
+tool is stopped at its next cooperative suspend point (`Task.sleep`,
+SwiftSlash subprocess awaits, and other suspension-aware work) and the server
+reports the outcome as an `isError` result for any listener still present.
+Cancelling a finished or unknown request id is a no-op.
+
+The `MCPClient` emits this automatically when a per-call deadline expires, so a
+timed-out call does not leave the server executing the tool unbounded. Like
+`notifications/initialized`, the notification form gets no response, and a
+client that sends it as a request with an `id` gets an empty success response.
+
+> Note: cooperative cancellation only — a tool that never suspends (pure CPU
+> work) observes the cancellation at its next `await`, and a server handling
+> messages FIFO per connection processes the notification on a parallel path so
+> it is not parked behind the very call it interrupts.
 
 ## Error Codes
 

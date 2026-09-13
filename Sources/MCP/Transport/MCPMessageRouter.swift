@@ -51,6 +51,27 @@ final class MCPMessageRouter: @unchecked Sendable {
     /// serialized through this lock.
     private let toolsLock = Mutex<()>(())
 
+    /// Identifies an in-flight tool invocation: the caller's source address
+    /// disambiguates concurrent connections (JSON-RPC ids are only unique
+    /// within a session, not across sessions on a shared router).
+    private struct InvocationKey: Hashable {
+        let source: String
+        let id: JSONRPCID
+    }
+
+    /// In-flight tool invocation tasks, keyed for `notifications/cancelled`.
+    ///
+    /// Every `tools/call` runs its invocation inside a structured task
+    /// registered under its request id; a `notifications/cancelled` carrying
+    /// that id cancels the task, which surfaces as `CancellationError` inside
+    /// the invocation and maps to an `isError` result. Registers are removed
+    /// when the invocation completes, so cancelling a finished call is a
+    /// no-op.
+    private var inFlightInvocations: [InvocationKey: Task<MCPToolResult, Error>] = [:]
+    /// Guards `inFlightInvocations` (written from message actors, read by the
+    /// cancelled-notification path, which may come from any connection).
+    private let invocationsLock = Mutex<()>(())
+
     /// Creates a router.
     ///
     /// - Parameters:
@@ -239,6 +260,16 @@ final class MCPMessageRouter: @unchecked Sendable {
             return makeErrorResponse(id: .null, code: -32600, message: "Invalid Request")
         } else if let notification = try? QuickJSON.decode(JSONRPCNotification.self, from: bytes) {
             logger.trace("Received notification: method=\(notification.method)")
+            // `notifications/cancelled` is the spec's cancellation signal: its
+            // params carry the request id of the call to stop. Cancelling
+            // surfaces as CancellationError at the invocation's next
+            // cooperative suspend point and maps to an isError result — the
+            // client that timed out has already dropped the entry, so the
+            // response is harmless.
+            if notification.method == "notifications/cancelled",
+               let requestID = notification.params?["requestId"].map(\.value).flatMap(JSONRPCID.init) {
+                await cancelInvocation(id: requestID, source: caller.sourceAddress ?? "")
+            }
             // Notifications never produce responses.
             return nil
         } else if envelope != nil {
@@ -408,6 +439,11 @@ final class MCPMessageRouter: @unchecked Sendable {
 
         let arguments = (params["arguments"]?.value as? [String: Any]) ?? [:]
 
+        // `[String: Any]` is not `Sendable`; snapshot the decoded values into
+        // a Sendable form for capture by the `@Sendable` invocation closures,
+        // then unwrap inside the closure body.
+        let capturedArguments: [String: AnyCodable] = arguments.mapValues(AnyCodable.init)
+
         // Dispatcher (macro-generated, typed) path first: the server keeps
         // authorization policy in one place by reading the tool's required
         // access from the dispatcher, then drops into the exhaustive typed
@@ -428,8 +464,8 @@ final class MCPMessageRouter: @unchecked Sendable {
             return await invokeTool(id: id, toolName: toolName, arguments: arguments, caller: caller) {
                 guard let result = try await dispatcher.callTool(
                     named: toolName,
-                    arguments: arguments,
-                    context: MCPContext(arguments: arguments, callerInfo: caller)
+                    arguments: capturedArguments.mapValues(\.value),
+                    context: MCPContext(arguments: capturedArguments.mapValues(\.value), callerInfo: caller)
                 ) else {
                     throw MCPError.toolNotFound(toolName)
                 }
@@ -447,6 +483,9 @@ final class MCPMessageRouter: @unchecked Sendable {
         arguments: [String: Any],
         caller: MCPCallerInfo
     ) async -> [UInt8] {
+        // Sendable snapshot for the @Sendable invocation closures (next path).
+        let capturedArguments: [String: AnyCodable] = arguments.mapValues(AnyCodable.init)
+
         if let toolType = toolType(named: toolName) {
             guard caller.accessLevel >= toolType.configuration.requiredAccess else {
                 logger.warning("Access denied for tool: \(toolName) (caller level \(caller.accessLevel.rawValue))")
@@ -455,8 +494,8 @@ final class MCPMessageRouter: @unchecked Sendable {
 
             return await invokeTool(id: id, toolName: toolName, arguments: arguments, caller: caller) {
                 var tool = toolType.init()
-                try tool.apply(arguments: arguments)
-                let context = MCPContext(arguments: arguments, callerInfo: caller)
+                try tool.apply(arguments: capturedArguments.mapValues(\.value))
+                let context = MCPContext(arguments: capturedArguments.mapValues(\.value), callerInfo: caller)
                 return try await tool.invoke(context: context)
             }
         } else if let instance = toolInstance(named: toolName) {
@@ -467,12 +506,26 @@ final class MCPMessageRouter: @unchecked Sendable {
 
             return await invokeTool(id: id, toolName: toolName, arguments: arguments, caller: caller) {
                 var mutableInstance = instance
-                try mutableInstance.apply(arguments: arguments)
-                let context = MCPContext(arguments: arguments, callerInfo: caller)
+                try mutableInstance.apply(arguments: capturedArguments.mapValues(\.value))
+                let context = MCPContext(arguments: capturedArguments.mapValues(\.value), callerInfo: caller)
                 return try await mutableInstance.invoke(context: context)
             }
         } else {
             return makeErrorResponse(id: id, code: -32602, message: "Unknown tool: \(toolName)")
+        }
+    }
+
+    /// Cancels the in-flight invocation for a request id on the given source
+    /// (if one is still registered). Best-effort: a finished call has already
+    /// been unregistered, and a foreign id simply matches nothing.
+    private func cancelInvocation(id: JSONRPCID, source: String) async {
+        let key = InvocationKey(source: source, id: id)
+        let task: Task<MCPToolResult, Error>? = invocationsLock.withLock { _ in
+            inFlightInvocations.removeValue(forKey: key)
+        }
+        task?.cancel()
+        if task != nil {
+            logger.debug("Cancelled in-flight invocation: source=\(source) id=\(id)")
         }
     }
 
@@ -482,15 +535,25 @@ final class MCPMessageRouter: @unchecked Sendable {
     /// (`-32602` Invalid params). Failure inside the tool's own execution,
     /// however, is reported as a result with `isError: true` per the MCP
     /// spec's Error Handling section, not as a JSON-RPC error.
+    ///
+    /// The invocation runs inside a registered structured task so
+    /// `notifications/cancelled` can stop it at its next cooperative suspend
+    /// point. A cancelled invocation throws `CancellationError`, which the
+    /// catch-all maps to an `isError` result for any observer that is still
+    /// listening.
     private func invokeTool(
         id: JSONRPCID,
         toolName: String,
         arguments: [String: Any],
         caller: MCPCallerInfo,
-        invocation: () async throws -> MCPToolResult
+        invocation: @escaping @Sendable () async throws -> MCPToolResult
     ) async -> [UInt8] {
+        let key = InvocationKey(source: caller.sourceAddress ?? "", id: id)
+        let task = Task { try await invocation() }
+        invocationsLock.withLock { _ in inFlightInvocations[key] = task }
+        defer { _ = invocationsLock.withLock { _ in inFlightInvocations.removeValue(forKey: key) } }
         do {
-            let result = try await invocation()
+            let result = try await task.value
             return makeSuccessResponse(id: id, result: ToolsCallResult(content: result.content, isError: result.isError))
         } catch let error as MCPError {
             switch error {

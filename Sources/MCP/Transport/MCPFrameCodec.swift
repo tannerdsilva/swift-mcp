@@ -44,6 +44,12 @@ final class MCPFrameCodec: ChannelDuplexHandler, @unchecked Sendable {
     /// Pre-encoded `-32700 Message too large` error frame (no newline; the
     /// reject path writes it framed directly).
     private let oversizeErrorFrame: [UInt8]
+    /// Called on the event loop when a frame exceeds the cap, just before the
+    /// channel closes. Carriers use it to record *why* the connection died so
+    /// the client can surface a size-specific error instead of a generic
+    /// closed-connection. `nil` (the server carriers) keeps it a silent
+    /// session teardown.
+    private let onRejectOversize: (@Sendable () -> Void)?
 
     /// Creates a new frame codec.
     ///
@@ -53,9 +59,16 @@ final class MCPFrameCodec: ChannelDuplexHandler, @unchecked Sendable {
     ///     bounding per-connection memory regardless of peer behavior.
     ///   - oversizeErrorFrame: Pre-encoded JSON-RPC error frame written when
     ///     the cap is exceeded, before the channel closes.
-    init(maxMessageSize: Int, oversizeErrorFrame: [UInt8]) {
+    ///   - onRejectOversize: Optional callback fired on the event loop when
+    ///     the cap is exceeded (before the close). Defaults to `nil`.
+    init(
+        maxMessageSize: Int,
+        oversizeErrorFrame: [UInt8],
+        onRejectOversize: (@Sendable () -> Void)? = nil
+    ) {
         self.maxMessageSize = maxMessageSize
         self.oversizeErrorFrame = oversizeErrorFrame
+        self.onRejectOversize = onRejectOversize
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -112,6 +125,7 @@ final class MCPFrameCodec: ChannelDuplexHandler, @unchecked Sendable {
     /// codec's own outbound `write` (which expects an unframed `[UInt8]`
     /// payload) would trap on `unwrapOutboundIn`.
     private func rejectOversize(context: ChannelHandlerContext) {
+        onRejectOversize?()
         var out = context.channel.allocator.buffer(capacity: oversizeErrorFrame.count + 1)
         out.writeBytes(oversizeErrorFrame)
         out.writeInteger(UInt8(0x0A))

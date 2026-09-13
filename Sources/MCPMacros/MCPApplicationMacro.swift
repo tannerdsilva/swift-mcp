@@ -58,6 +58,7 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
         let serverVersion = extractStringArgument(from: node, name: "version") ?? ""
         let addressArg = extractExpressionArgument(from: node, name: "address")
         let transportArg = extractExpressionArgument(from: node, name: "transport")
+        let maxMessageSizeArg = extractIntArgument(from: node, name: "maxMessageSize")
 
         if addressArg != nil && transportArg != nil {
             throw MacroError.message(
@@ -103,7 +104,8 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
             serverName: serverName,
             serverVersion: serverVersion,
             addressArg: addressArg,
-            transportArg: transportArg
+            transportArg: transportArg,
+            maxMessageSizeArg: maxMessageSizeArg
         )
 
         return [
@@ -142,6 +144,19 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
         for arg in argList {
             guard let label = arg.label, label.text == name else { continue }
             return trimmed(arg.expression.description)
+        }
+        return nil
+    }
+
+    /// Extracts an integer literal parameter (e.g. `maxMessageSize`) from the
+    /// macro attribute. Returns the value, or nil when absent or not a plain
+    /// integer literal.
+    static func extractIntArgument(from node: AttributeSyntax, name: String) -> Int? {
+        guard let argList = node.arguments?.as(LabeledExprListSyntax.self) else { return nil }
+        for arg in argList {
+            guard let label = arg.label, label.text == name else { continue }
+            guard let literal = arg.expression.as(IntegerLiteralExprSyntax.self) else { return nil }
+            return Int(literal.literal.text)
         }
         return nil
     }
@@ -383,13 +398,18 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
         serverName: String,
         serverVersion: String,
         addressArg: String?,
-        transportArg: String?
+        transportArg: String?,
+        maxMessageSizeArg: Int?
     ) -> String {
         let serverInit: String
         if let transport = transportArg {
             serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", transport: \(transport), dispatcher: app)"
         } else if let address = addressArg {
             serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", address: \(address), dispatcher: app)"
+        } else if let maxMessageSize = maxMessageSizeArg {
+            // a raised cap requires an explicit stdio transport — the default
+            // server transport is otherwise capped at `StdioTransport.defaultMaxMessageSize`.
+            serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", transport: StdioTransport(maxMessageSize: \(maxMessageSize)), dispatcher: app)"
         } else {
             serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", dispatcher: app)"
         }

@@ -118,24 +118,67 @@ final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
             return
         }
         pendingFrames += 1
+        // Re-arm a read immediately — while this frame is still being
+        // processed — so a long in-flight call (tools/call sleeping for
+        // minutes) does not starve later frames. Reads are budgeted against
+        // the queue cap, not a drain-to-zero: bounded by `maxPendingFrames`,
+        // and a pipe that fills with notifications while a tool runs can still
+        // deliver `notifications/cancelled` to interrupt it. EOF (inputClosed)
+        // pauses re-arming; the drain-close still runs once the queue empties.
+        if !inputClosed && pendingFrames < Self.maxPendingFrames {
+            context.read()
+        }
+        // Notifications (no `id`) bypass the serialized request queue: they
+        // must reach the router while an in-flight tool is still running —
+        // `notifications/cancelled` is what stops a timed-out call. The FIFO
+        // contract covers requests and their responses; notifications produce
+        // no response, so running them concurrently reorders nothing the peer
+        // observes.
+        let eventLoop = context.eventLoop
+        let channel = context.channel
+        if isNotificationFrame(frame) {
+            Task {
+                await actor.processNotification(frame)
+                eventLoop.execute { [self, channel] in
+                    self.pendingFrames -= 1
+                    self.maybeCloseAfterDrain(channel: channel)
+                }
+            }
+            return
+        }
         // Dispatch to the actor for serialized processing; the completion hops
         // back to the event loop so the pending counter stays event-loop-confined
         // and a triggered close is ordered behind the response write the actor
         // just enqueued. only sendable values are captured across the hop.
-        let eventLoop = context.eventLoop
-        let channel = context.channel
         Task {
             await actor.process(frame)
             eventLoop.execute { [self, channel] in
                 self.pendingFrames -= 1
-                if self.pendingFrames == 0, !self.inputClosed {
-                    // demand-driven reads: re-arm only once the queue drains,
-                    // so real backpressure bounds how far the peer can get ahead.
-                    channel.read()
-                }
                 self.maybeCloseAfterDrain(channel: channel)
             }
         }
+    }
+
+    /// Classifies a frame as a notification: a JSON object envelope without an
+    /// `id` key. Batches (`[`) always contain requests-from-our-client shape
+    /// and stay on the serialized path.
+    private func isNotificationFrame(_ bytes: [UInt8]) -> Bool {
+        guard let first = firstNonWhitespaceByte(bytes), first == 0x7B else { return false }
+        // The router performs the authoritative classification; this mirror
+        // only decides which path a frame takes. Notification bodies are tiny.
+        guard let envelope = try? QuickJSON.decode([String: AnyCodable].self, from: bytes) else {
+            return false
+        }
+        return envelope["id"] == nil
+    }
+
+    private func firstNonWhitespaceByte(_ bytes: [UInt8]) -> UInt8? {
+        for byte in bytes {
+            if byte != 0x20, byte != 0x09, byte != 0x0A, byte != 0x0D {
+                return byte
+            }
+        }
+        return nil
     }
 
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {

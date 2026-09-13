@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import MCP
+@testable import MCP
 import QuickJSON
 import NIOCore
 import NIOPosix
@@ -136,7 +136,7 @@ func clientRoundTripOverSubprocess() async throws {
     #expect(await client.negotiatedVersion() == "2025-11-25")
 
     let tools = try await client.listTools()
-    #expect(tools.map(\.name) == ["echo", "add", "slow", "admin"])
+    #expect(tools.map(\.name) == ["echo", "add", "slow", "big", "envget", "admin"])
     if let error = tools.first(where: { $0.name == "echo" })?.description {
         #expect(error == "Echo a message back verbatim")
     }
@@ -188,6 +188,17 @@ func clientCallTimeout() async throws {
     }
     #expect(ContinuousClock.now - started < .seconds(5))
 
+    // The timed-out call must have sent `notifications/cancelled`, and the
+    // child's in-flight `slow` tool must have observed it (the sleep throws and
+    // the fixture writes an observable marker to stderr) — the cancellation lie
+    // is closed: the child does NOT keep running a timed-out tool.
+    let cancellationSeen = await within(.seconds(10)) {
+        while !transport.stderrTailSnapshot().contains(where: { $0.contains("fixture slow-cancelled") }) {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+    #expect(cancellationSeen == .completed)
+
     // close() still runs the full ladder even though the tool is in flight.
     let closed = await within(.seconds(15)) {
         await client.close()
@@ -228,16 +239,178 @@ func clientMidCallKillFailsClean() async throws {
 func clientOversizeFrameCloses() async throws {
     // the client-side cap: the fixture's initialize response (~160 bytes)
     // exceeds 128 bytes, so the codec rejects it and the connection closes
-    // during the handshake.
+    // during the handshake — and the in-flight call must fail with a
+    // size-specific error, not a generic "connection closed".
     let transport = SubprocessClientTransport(
         configuration: .init(executable: try fixtureServerPath(), maxMessageSize: 128)
     )
     let client = MCPClient(transport: transport)
 
-    await #expect(throws: MCPClientError.self) {
+    await #expect(throws: MCPClientError.messageTooLarge(128)) {
         try await client.connect()
     }
     #expect(await client.currentState() == .disconnected)
+}
+
+@Test("MCPClient reports a size-specific error when a tool result exceeds the cap")
+func clientMessageTooLargeToolCall() async throws {
+    // cap the client at 1 KiB; the fixture's `big` tool returns 5000 chars
+    // (~5 KiB), so the response frame is rejected and the CALL fails with
+    // messageTooLarge — distinguishable from a crash.
+    let transport = SubprocessClientTransport(
+        configuration: .init(executable: try fixtureServerPath(), maxMessageSize: 1024)
+    )
+    var clientConfig = MCPClient.ClientConfiguration()
+    clientConfig.callTimeout = .seconds(10)
+    let client = MCPClient(transport: transport, configuration: clientConfig)
+
+    try await client.connect()
+    // (no listTools: the 6-tool catalog itself would exceed the 1 KiB cap and
+    // fail there first — the tool RESULT is what must trip it.)
+
+    await #expect(throws: MCPClientError.messageTooLarge(1024)) {
+        _ = try await client.callTool("big", arguments: ["count": 5000])
+    }
+    #expect(await client.currentState() == .disconnected)
+}
+
+@Test("MCPClient surfaces negotiationTimeout, not callTimeout, for a silent peer")
+func clientNegotiationTimeoutIsLabeled() async throws {
+    // a raw NIO acceptor that accepts the connection and then says nothing:
+    // the handshake must fail with the handshake-specific error.
+    let group = MultiThreadedEventLoopGroup.singleton
+    let acceptorChannel = try await ServerBootstrap(group: group)
+        .serverChannelOption(ChannelOptions.backlog, value: 1)
+        .childChannelInitializer { _ in group.next().makeSucceededVoidFuture() }
+        .bind(host: "127.0.0.1", port: 0)
+        .get()
+    defer { Task { try? await acceptorChannel.close() } }
+    guard let port = acceptorChannel.localAddress?.port else {
+        Issue.record("acceptor bound without a port")
+        return
+    }
+
+    var configuration = MCPClient.ClientConfiguration()
+    configuration.negotiationTimeout = .seconds(2)
+    let transport = TCPClientTransport(configuration: .init(address: .hostname("127.0.0.1", port: port)))
+    let client = MCPClient(transport: transport, configuration: configuration)
+
+    let started = ContinuousClock.now
+    await #expect(throws: MCPClientError.negotiationTimeout) {
+        try await client.connect()
+    }
+    #expect(ContinuousClock.now - started < .seconds(6))
+}
+
+@Test("MCPClient spawns the child with the parent environment inherited")
+func clientInheritsParentEnvironment() async throws {
+    // the fixture reports child env values back over a tool; a variable the
+    // test sets in ITS environment must be visible in the child by default.
+    setenv("MCP_TEST_INHERITED_VAR", "hello-inherited", 1)
+    defer { unsetenv("MCP_TEST_INHERITED_VAR") }
+
+    let transport = SubprocessClientTransport(configuration: .init(executable: try fixtureServerPath()))
+    let client = MCPClient(transport: transport)
+    try await client.connect()
+    _ = try await client.listTools()
+
+    let result = try await client.callTool("envget", arguments: ["key": "MCP_TEST_INHERITED_VAR"])
+    #expect(result.flattenedText == "hello-inherited")
+    await client.close()
+}
+
+@Test("MCPClient scrubs the child environment when inheritance is disabled")
+func clientScrubbedEnvironmentWhenDisabled() async throws {
+    setenv("MCP_TEST_SCRUB_VAR", "should-not-leak", 1)
+    defer { unsetenv("MCP_TEST_SCRUB_VAR") }
+
+    // no inheritance + one explicit var: PATH and the leaky var must both be
+    // absent from the child (the env dict is the child's COMPLETE envp).
+    let transport = SubprocessClientTransport(
+        configuration: .init(
+            executable: try fixtureServerPath(),
+            environment: ["MCP_TEST_SCRUB_VAR": "explicit-value"],
+            inheritParentEnvironment: false
+        )
+    )
+    let client = MCPClient(transport: transport)
+    try await client.connect()
+    _ = try await client.listTools()
+
+    let leaked = try await client.callTool("envget", arguments: ["key": "MCP_TEST_SCRUB_VAR"])
+    #expect(leaked.flattenedText == "explicit-value")
+    let path = try await client.callTool("envget", arguments: ["key": "PATH"])
+    #expect(path.flattenedText == "(unset)")
+    await client.close()
+}
+
+/// A canned-frame carrier: yields a fixed frame sequence (paced) and then
+/// ends, driving the client's read loop through its public surface in-process
+/// without any real connection.
+private final class CannedTransport: ClientTransport, @unchecked Sendable {
+    private let frameStream = ClientFrames()
+    private let payloads: [[UInt8]]
+    private let delay: Duration
+
+    init(payloads: [[UInt8]], delay: Duration = .milliseconds(50)) {
+        self.payloads = payloads
+        self.delay = delay
+    }
+
+    nonisolated func frames() -> ClientFrameSequence {
+        frameStream.sequence
+    }
+
+    var supportsCooperativeShutdown: Bool { false }
+
+    func start() async throws {
+        let source = frameStream.source
+        let payloads = self.payloads
+        let delay = self.delay
+        Task {
+            for payload in payloads {
+                try? await Task.sleep(for: delay)
+                _ = source.yield(contentsOf: [payload])
+            }
+            source.finish()
+        }
+    }
+
+    func sendFrame(_ bytes: [UInt8]) async throws {
+        // requests are answered by the canned payloads; nothing to write.
+    }
+
+    func stop() async throws {
+        frameStream.source.finish()
+    }
+}
+
+@Test("MCPClient invalidates the catalog and fires the hook on list_changed")
+func clientListChangedFiresCatalogHook() async throws {
+    let flag = Mutex<Bool>(false)
+    var configuration = MCPClient.ClientConfiguration()
+    configuration.catalogInvalidated = { flag.withLock { $0 = true } }
+
+    // canned sequence: initialize response (id 0) → tools/list response (id 1)
+    // → list_changed notification → EOF
+    let initFrame = Array(#"{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"canned","version":"1.0.0"}}}"#.utf8)
+    let catalogFrame = Array(#"{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"one","description":"d","inputSchema":{"type":"object","properties":{}}}]}}"#.utf8)
+    let listChanged = Array(#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#.utf8)
+
+    let transport = CannedTransport(payloads: [initFrame, catalogFrame, listChanged])
+    let client = MCPClient(transport: transport, configuration: configuration)
+
+    try await client.connect()
+    _ = try await client.listTools()
+    #expect(await client.remoteCatalog().count == 1)
+
+    let fired = await within(.seconds(5)) {
+        while !flag.withLock({ $0 }) {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+    }
+    #expect(fired == .completed)
+    #expect(await client.remoteCatalog().count == 0)
 }
 
 // MARK: - TCP client carrier
@@ -470,6 +643,63 @@ func localClientCallTimeout() async throws {
         _ = try await client.callTool("slow", arguments: [:])
     }
     #expect(ContinuousClock.now - started < .seconds(5))
+
+    await client.close()
+}
+
+/// A dispatcher whose `slow` tool records whether it observed cancellation, so
+/// the in-process cancellation chain can be asserted end-to-end.
+private final class CancellationProbe: @unchecked Sendable {
+    let cancelled = Mutex<Bool>(false)
+}
+
+private struct CancellationRecordingDispatcher: MCPToolDispatcher {
+    let probe = CancellationProbe()
+
+    func toolCatalog(for callerAccessLevel: AccessLevel) -> [MCPToolDescriptor] {
+        [MCPToolDescriptor(name: "slow", description: "Sleep and record cancellation", parameters: [])]
+    }
+
+    func requiredAccess(named name: String) -> AccessLevel? {
+        .public
+    }
+
+    func callTool(named name: String, arguments: [String: Any], context: MCPContext) async throws -> MCPToolResult? {
+        do {
+            try await Task.sleep(for: .seconds(60))
+            return .text("done")
+        } catch is CancellationError {
+            probe.cancelled.withLock { $0 = true }
+            throw CancellationError()
+        }
+    }
+}
+
+@Test("MCPClient's timed-out call cancels the in-process tool invocation")
+func localTimedOutCallCancelsTool() async throws {
+    let dispatcher = CancellationRecordingDispatcher()
+    var configuration = MCPClient.ClientConfiguration()
+    configuration.callTimeout = .milliseconds(500)
+
+    let transport = LocalClientTransport(dispatcher: dispatcher)
+    let client = MCPClient(transport: transport, configuration: configuration)
+
+    try await client.connect()
+    _ = try await client.listTools()
+
+    await #expect(throws: MCPClientError.callTimeout) {
+        _ = try await client.callTool("slow", arguments: [:])
+    }
+
+    // the timed-out call must have emitted notifications/cancelled; the local
+    // carrier routes it into the router, which cancels the in-flight
+    // invocation task — observable as the tool's CancellationError catch.
+    let seen = await within(.seconds(5)) {
+        while !dispatcher.probe.cancelled.withLock({ $0 }) {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+    }
+    #expect(seen == .completed)
 
     await client.close()
 }

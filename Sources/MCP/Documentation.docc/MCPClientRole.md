@@ -72,8 +72,12 @@ is cheap — the connection, not the process, is the disposable unit.)
 Every request is correlated by JSON-RPC id through an actor-owned in-flight
 table (out-of-order replies are safe) and carries a deadline
 (``MCPClient/ClientConfiguration``): a stuck peer can never hang the caller.
-On EOF, every in-flight request fails with
-``MCPClientError/connectionClosed``.
+When a per-call deadline expires, the client emits `notifications/cancelled`
+for that request id, so a server-side in-flight tool is interrupted at its next
+cooperative suspend point instead of running on with the caller's identity. On
+plain EOF, every in-flight request fails with ``MCPClientError/connectionClosed``
+— unless the carrier recorded a size-cap teardown, in which case calls fail
+with ``MCPClientError/messageTooLarge(_:)``.
 
 ## The carriers
 
@@ -90,6 +94,24 @@ frames until EOF), and `stop()`.
 The actor is deliberately carrier-agnostic: the same state machine, timeouts,
 and catalog logic run identically over all three, so network-free MCP is a
 configuration, not a fork.
+
+## Environment & trust boundary (subprocess)
+
+By default the child inherits the **full parent environment**, with
+``SubprocessClientTransport/Configuration/environment`` merged over it (values
+here win), followed by the framework's own plumbing
+(`MCP_ACCESS_LEVEL`, optional `MCP_CALLER_IDENT`). SwiftSlash passes the dict
+to `posix_spawn` as the child's **complete** envp, so inheritance is done
+explicitly by this transport rather than by the OS.
+
+That has a real consequence for hosts holding secrets: a spawned plugin can
+read every host environment variable and shares the host uid. `trustLevel` is
+policy signaling from the harness to its own first-party child — it is **not**
+a security boundary. Treat spawned plugins as extensions of the harness
+process, not contained parties. To scrub, set
+`inheritParentEnvironment: false` and pass exactly the variables the plugin
+needs; the resulting dict (plus the MCP plumbing) is the child's entire
+environment.
 
 `ClientTransport.frames()` returns a backpressured ``ClientFrameSequence``:
 the carrier pauses reads at a high watermark and resumes below a low one, so a

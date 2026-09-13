@@ -55,6 +55,14 @@ public actor MCPClient {
         public var clientName: String = "mcp-swift-client"
         /// The `clientInfo.version` sent during `initialize`.
         public var clientVersion: String = "1.0.0"
+        /// Invoked (best-effort) whenever the remote `tools/list_changed`
+        /// notification invalidates the cached catalog.
+        ///
+        /// The catalog is rebuilt by the next `listTools()` call; this hook
+        /// exists so a harness (e.g. a tool registry syncing remote servers)
+        /// can react — re-list, diff, or flag the server for respawn — without
+        /// polling. Runs on the client actor; keep it cheap.
+        public var catalogInvalidated: (@Sendable () -> Void)?
 
         /// Creates a default configuration.
         public init() {}
@@ -258,7 +266,11 @@ public actor MCPClient {
         nextID += 1
         let frame = try QuickJSON.encode(JSONRPCRequest(id: id, method: method, params: params))
 
-        let responseTask = makeResponseTask(id: id, timeout: timeout)
+        let responseTask = makeResponseTask(
+            id: id,
+            timeout: timeout,
+            error: duringHandshake ? .negotiationTimeout : .callTimeout
+        )
         try await transport.sendFrame(frame)
         return try await responseTask.value
     }
@@ -273,7 +285,7 @@ public actor MCPClient {
     /// The reaper is deliberately a plain `Task`, not a task-group child:
     /// group-child scheduling proved unreliable in strict-concurrency builds
     /// on this toolchain, while unstructured `Task`s are consistent.
-    private func makeResponseTask(id: JSONRPCID, timeout: Duration) -> Task<[UInt8], Error> {
+    private func makeResponseTask(id: JSONRPCID, timeout: Duration, error: MCPClientError) -> Task<[UInt8], Error> {
         Task { [self] () -> [UInt8] in
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[UInt8], Error>) in
                 Task {
@@ -281,7 +293,7 @@ public actor MCPClient {
                 }
                 Task {
                     try? await Task.sleep(for: timeout)
-                    await self.expireInFlight(id)
+                    await self.expireInFlight(id, error: error)
                 }
             }
         }
@@ -291,9 +303,23 @@ public actor MCPClient {
         inFlight[id] = InFlight(continuation: continuation)
     }
 
-    private func expireInFlight(_ id: JSONRPCID) async {
+    private func expireInFlight(_ id: JSONRPCID, error: MCPClientError) async {
         guard let entry = inFlight.removeValue(forKey: id) else { return }
-        entry.continuation.resume(throwing: MCPClientError.callTimeout)
+        entry.continuation.resume(throwing: error)
+        // Best-effort cancellation signal: tell the server its in-flight
+        // invocation for this request id is no longer awaited, so it can stop
+        // at its next cooperative suspend point instead of running on with
+        // the caller's identity after the caller moved on. Ignored on failure
+        // (the connection may already be gone) and never delays the timeout
+        // report above.
+        guard error == .callTimeout else { return }
+        let frame = try? QuickJSON.encode(JSONRPCNotification(
+            method: "notifications/cancelled",
+            params: ["requestId": AnyCodable(id.wireValue)]
+        ))
+        if let frame {
+            try? await transport.sendFrame(frame)
+        }
     }
 
     // MARK: - Inbound routing
@@ -308,6 +334,7 @@ public actor MCPClient {
             // catalog — catalogs are rebuilt, never trusted from memory.
             if let method = object["method"]?.value as? String, method == "notifications/tools/list_changed" {
                 catalog = [:]
+                configuration.catalogInvalidated?()
             }
             return
         }
@@ -323,8 +350,18 @@ public actor MCPClient {
     private func handleTransportClosed() async {
         guard state != .disconnected else { return }
         state = .disconnected
+        // A size-cap teardown is distinguishable from a crash: the carrier
+        // recorded the cap when its inbound codec rejected the oversized
+        // frame, so callers see "result too large" instead of a generic
+        // closed connection. The session is still dead either way.
+        let error: MCPClientError
+        if let limit = transport.sizeCapViolation {
+            error = .messageTooLarge(limit)
+        } else {
+            error = .connectionClosed
+        }
         for (_, entry) in inFlight {
-            entry.continuation.resume(throwing: MCPClientError.connectionClosed)
+            entry.continuation.resume(throwing: error)
         }
         inFlight.removeAll()
         disconnectContinuation?.resume()

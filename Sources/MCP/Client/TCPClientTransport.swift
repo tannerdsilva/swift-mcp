@@ -63,6 +63,10 @@ public final class TCPClientTransport: ClientTransport, @unchecked Sendable {
     private let eventLoopGroup: EventLoopGroup
     private let logger: Logger?
     private let oversizeErrorFrame: [UInt8]
+    /// Records the size cap when the inbound codec rejects an oversized frame,
+    /// so the client can fail in-flight calls with a size-specific error
+    /// instead of a generic `connectionClosed`.
+    private let sizeCapRecorder = SizeCapRecorder()
     /// The backpressured producer/consumer halves of the frame stream.
     private let clientFrames: ClientFrames
 
@@ -95,6 +99,12 @@ public final class TCPClientTransport: ClientTransport, @unchecked Sendable {
         stateLock.withLock { _ in channel?.remoteAddress }
     }
 
+    /// Reports the size cap when the connection was torn down by an oversized
+    /// inbound frame, or `nil` for plain EOF/crash.
+    public var sizeCapViolation: Int? {
+        sizeCapRecorder.value
+    }
+
     /// The local socket address the connection is bound to, once started.
     public var localAddress: SocketAddress? {
         stateLock.withLock { _ in channel?.localAddress }
@@ -112,13 +122,18 @@ public final class TCPClientTransport: ClientTransport, @unchecked Sendable {
         if alreadyStarted { return }
 
         let maxMessageSize = configuration.maxMessageSize
+        let sizeCapRecorder = self.sizeCapRecorder
 
         let bootstrap = ClientBootstrap(group: eventLoopGroup)
             .connectTimeout(configuration.connectTimeout)
             .channelOption(ChannelOptions.autoRead, value: false)
-            .channelInitializer { [clientFrames, maxMessageSize, oversizeErrorFrame, logger] channel in
+            .channelInitializer { [clientFrames, maxMessageSize, oversizeErrorFrame, sizeCapRecorder, logger] channel in
                 channel.pipeline.addHandlers(
-                    MCPFrameCodec(maxMessageSize: maxMessageSize, oversizeErrorFrame: oversizeErrorFrame),
+                    MCPFrameCodec(
+                        maxMessageSize: maxMessageSize,
+                        oversizeErrorFrame: oversizeErrorFrame,
+                        onRejectOversize: { sizeCapRecorder.record(maxMessageSize) }
+                    ),
                     ClientFrameBridge(source: clientFrames.source, demand: clientFrames.demand, logger: logger)
                 )
             }

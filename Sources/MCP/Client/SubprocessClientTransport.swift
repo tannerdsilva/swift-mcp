@@ -63,9 +63,23 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
         public var executable: String
         /// Arguments passed to the executable.
         public var arguments: [String]
-        /// Extra environment for the child. The child inherits the parent's
-        /// environment merged with these values.
+        /// Extra environment for the child, merged **over** the inherited
+        /// parent environment (values here win). Set
+        /// `inheritParentEnvironment` to `false` to spawn with exactly these
+        /// values and nothing else — the scrub path for harnesses that must
+        /// keep host secrets out of a plugin.
+        ///
+        /// Note the real trust boundary: a subprocess shares the host uid and,
+        /// by default, the full parent environment, so any spawned server can
+        /// read every host secret. `trustLevel` is policy signaling from the
+        /// harness to its own first-party child — it is **not** a security
+        /// boundary. Treat spawned plugins as extensions of the harness
+        /// process, not contained parties.
         public var environment: [String: String]
+        /// Whether the child inherits the parent process's environment before
+        /// `environment` is merged over it. Defaults to `true`. Set `false`
+        /// for credential scrubbing (see ``environment``).
+        public var inheritParentEnvironment: Bool
         /// An optional working directory for the child.
         public var workingDirectory: String?
         /// The maximum client-side frame size. A larger frame from the child
@@ -97,6 +111,7 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
             executable: String,
             arguments: [String] = [],
             environment: [String: String] = [:],
+            inheritParentEnvironment: Bool = true,
             workingDirectory: String? = nil,
             maxMessageSize: Int = 10 * 1024 * 1024,
             shutdownGrace: Duration = .seconds(2),
@@ -106,6 +121,7 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
             self.executable = executable
             self.arguments = arguments
             self.environment = environment
+            self.inheritParentEnvironment = inheritParentEnvironment
             self.workingDirectory = workingDirectory
             self.maxMessageSize = maxMessageSize
             self.shutdownGrace = shutdownGrace
@@ -121,6 +137,11 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
     private let eventLoopGroup: EventLoopGroup
     private let logger: Logger?
     private let oversizeErrorFrame: [UInt8]
+    /// Records the size cap when the inbound codec rejects an oversized frame,
+    /// so `handleTransportClosed` can fail in-flight calls with a size-specific
+    /// error instead of a generic `connectionClosed`. Filled exactly once by
+    /// the event loop, read after the channel closes.
+    private let sizeCapRecorder = SizeCapRecorder()
     /// The backpressured producer/consumer halves of the frame stream.
     private let clientFrames: ClientFrames
     /// Live stderr lines (newest-dropping), for callers that want real-time
@@ -343,11 +364,16 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
 
         let channel: Channel
         do {
+            let sizeCapRecorder = self.sizeCapRecorder
             channel = try await NIOPipeBootstrap(group: eventLoopGroup)
                 .channelOption(ChannelOptions.autoRead, value: false)
-                .channelInitializer { [clientFrames, maxMessageSize, oversizeErrorFrame, logger] channel in
+                .channelInitializer { [clientFrames, maxMessageSize, oversizeErrorFrame, sizeCapRecorder, logger] channel in
                     channel.pipeline.addHandlers(
-                        MCPFrameCodec(maxMessageSize: maxMessageSize, oversizeErrorFrame: oversizeErrorFrame),
+                        MCPFrameCodec(
+                            maxMessageSize: maxMessageSize,
+                            oversizeErrorFrame: oversizeErrorFrame,
+                            onRejectOversize: { sizeCapRecorder.record(maxMessageSize) }
+                        ),
                         ClientFrameBridge(source: clientFrames.source, demand: clientFrames.demand, logger: logger)
                     )
                 }
@@ -418,16 +444,54 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
         stderrStream
     }
 
-    /// Builds the child environment: the caller's variables plus the
-    /// identity/trust plumbing the child's `StdioTransport` reads for access
-    /// gating (`MCP_ACCESS_LEVEL`, optional `MCP_CALLER_IDENT`).
+    /// Reports the size cap when the connection was torn down by an oversized
+    /// inbound frame, or `nil` for plain EOF/crash.
+    public var sizeCapViolation: Int? {
+        sizeCapRecorder.value
+    }
+
+    /// Builds the child environment.
+    ///
+    /// By default the child inherits the parent's environment (`environ`) with
+    /// `configuration.environment` merged over it, then the identity/trust
+    /// plumbing the child's `StdioTransport` reads for access gating
+    /// (`MCP_ACCESS_LEVEL`, optional `MCP_CALLER_IDENT`). SwiftSlash passes the
+    /// environment dict to `posix_spawn` as the child's **complete** envp — an
+    /// empty dict spawns an empty environment — so inheritance must be done
+    /// here explicitly. With `inheritParentEnvironment: false` the child gets
+    /// exactly `configuration.environment` plus the MCP plumbing (the scrub
+    /// path for secrets).
     private static func spawnEnvironment(_ configuration: Configuration) -> [String: String] {
-        var environment = configuration.environment
+        var environment = configuration.inheritParentEnvironment
+            ? parentEnvironment()
+            : [:]
+        for (key, value) in configuration.environment {
+            environment[key] = value
+        }
         environment["MCP_ACCESS_LEVEL"] = String(configuration.trustLevel.rawValue)
         if let identity = configuration.callerIdentity {
             environment["MCP_CALLER_IDENT"] = identity
         }
         return environment
+    }
+
+    /// Reads the current process's environment (`environ`) into a dictionary.
+    ///
+    /// Foundation-free: parses the C `environ` array directly. Values are
+    /// split at the first `=`.
+    private static func parentEnvironment() -> [String: String] {
+        var result: [String: String] = [:]
+        var cursor = environ
+        while let entry = cursor.pointee {
+            if let string = String(cString: entry, encoding: .utf8),
+               let separator = string.firstIndex(of: "=") {
+                let key = String(string[..<separator])
+                let value = String(string[string.index(after: separator)...])
+                result[key] = value
+            }
+            cursor = cursor.advanced(by: 1)
+        }
+        return result
     }
 
     /// Runs the shutdown ladder: EOF on the child's stdin → grace → SIGTERM →

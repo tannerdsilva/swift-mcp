@@ -118,6 +118,13 @@ enum JSONSchemaBuilder: Sendable {
             schema["enum"] = enumValues
         }
 
+        // Include the compile-time-evaluated default when the macro could
+        // resolve it statically, so clients (and the LLM) see what the server
+        // applies when the argument is omitted.
+        if let defaultValue = param.defaultValue {
+            schema["default"] = defaultValue.value
+        }
+
         // Array-typed parameters advertise their element type, so clients can
         // validate the shape of every element.
         if jsonType == .array, let elementTypeName = arrayElementTypeName(from: param.typeName) {

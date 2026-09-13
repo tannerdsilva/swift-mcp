@@ -170,6 +170,29 @@ enum JSONRPCID: Codable, Sendable, Hashable {
             try container.encodeNil()
         }
     }
+
+    /// The id as a plain `Any` for embedding in a `[String: AnyCodable]` params
+    /// dictionary (e.g. the `requestId` carried by `notifications/cancelled`).
+    var wireValue: Any {
+        switch self {
+        case .string(let value): return value
+        case .int(let value): return value
+        case .number(let value): return value
+        case .null: return JSONNull()
+        }
+    }
+
+    /// Reconstructs an id from a decoded params value (an `Int`, `Double`,
+    /// `String`, or `JSONNull` from JSON). Returns `nil` for unknown shapes.
+    init?(_ value: Any) {
+        switch value {
+        case let v as Int: self = .int(v)
+        case let v as Double: self = .number(v)
+        case let v as String: self = .string(v)
+        case is JSONNull: self = .null
+        default: return nil
+        }
+    }
 }
 
 // MARK: - MCP Protocol Methods
