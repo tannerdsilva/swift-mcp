@@ -25,6 +25,10 @@ MCP-by-subprocess via SwiftSlash 5.0 bring-your-own data channels.
   MCP-plugin subprocess (Second Law everywhere).
 - `MCPClientError` (Foundation-free, `Equatable`, `CustomStringConvertible`),
   `RemoteToolDescriptor`, `ClientFrameBridge`.
+- Client requests (`callTool`, `listTools`, `ping`) are now **task-cancellable**:
+  cancelling the caller's `Task` surfaces `CancellationError` promptly and emits
+  `notifications/cancelled`, so the remote invocation stops at its next
+  cooperative suspend point instead of outliving the caller.
 - Unified NIO transport core, shared by server and client: `MCPFrameCodec`
   (newline framing + per-frame size cap), `MCPMessageRouter` (JSON-RPC
   routing + tool registries), `MCPMessageHandler`, `TransportMessageHandler`.

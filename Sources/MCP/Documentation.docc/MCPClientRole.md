@@ -74,7 +74,13 @@ table (out-of-order replies are safe) and carries a deadline
 (``MCPClient/ClientConfiguration``): a stuck peer can never hang the caller.
 When a per-call deadline expires, the client emits `notifications/cancelled`
 for that request id, so a server-side in-flight tool is interrupted at its next
-cooperative suspend point instead of running on with the caller's identity. On
+cooperative suspend point instead of running on with the caller's identity.
+Caller task cancellation is wired to the same mechanism: cancelling the `Task`
+awaiting any request (`callTool`, `listTools`, `ping`) surfaces
+`CancellationError` promptly and emits the same `notifications/cancelled`, so
+the remote invocation stops at its next cooperative suspend point instead of
+outliving the caller. Late replies, deadline reapers, and concurrent cancels
+race through the in-flight table and resolve exactly once. On
 plain EOF, every in-flight request fails with ``MCPClientError/connectionClosed``
 — unless the carrier recorded a size-cap teardown, in which case calls fail
 with ``MCPClientError/messageTooLarge(_:)``.
