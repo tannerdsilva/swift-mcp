@@ -18,7 +18,7 @@ struct MCPClientTests {
 /// `swift build` must have run first (the test target does not build the
 /// executable itself). Resolved relative to this file, so the suite works from
 /// any checkout.
-private func fixtureServerPath() throws -> String {
+func fixtureServerPath() throws -> String {
     let source = URL(fileURLWithPath: #filePath)
     let repoRoot = source
         .deletingLastPathComponent()
@@ -36,7 +36,7 @@ private func fixtureServerPath() throws -> String {
 
 // MARK: - Timing helpers
 
-private enum RaceOutcome: Sendable, Equatable {
+enum RaceOutcome: Sendable, Equatable {
     case completed
     case timedOut
 }
@@ -68,7 +68,7 @@ private final class TestOnce: @unchecked Sendable {
 /// Deliberately not a task group: group-child scheduling proved unreliable in
 /// strict-concurrency builds on this toolchain, while plain unstructured
 /// `Task`s are consistent.
-private func within(
+func within(
     _ bound: Duration,
     _ operation: @escaping @Sendable () async throws -> Void
 ) async -> RaceOutcome {
