@@ -71,7 +71,9 @@ is cheap — the connection, not the process, is the disposable unit.)
 
 Every request is correlated by JSON-RPC id through an actor-owned in-flight
 table (out-of-order replies are safe) and carries a deadline
-(``MCPClient/ClientConfiguration``): a stuck peer can never hang the caller.
+(``MCPClient/ClientConfiguration``) on both its send and its response: a
+stuck peer — one that never answers or one that stops draining its pipe —
+can never hang the caller.
 When a per-call deadline expires, the client emits `notifications/cancelled`
 for that request id, so a server-side in-flight tool is interrupted at its next
 cooperative suspend point instead of running on with the caller's identity.

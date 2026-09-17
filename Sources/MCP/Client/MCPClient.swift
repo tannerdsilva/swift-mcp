@@ -21,7 +21,8 @@ import QuickJSON
 ///
 /// Every request is correlated by JSON-RPC id through an actor-owned in-flight
 /// table (out-of-order replies are safe), and every request carries a deadline
-/// — a stuck peer can never hang the caller.
+/// on its send and its response — a stuck peer, one that never answers or one
+/// that stops draining its pipe, can never hang the caller.
 ///
 /// ## Two Laws
 ///
@@ -204,14 +205,28 @@ public actor MCPClient {
     /// stalled peer times out (ignored) — EOF and the carrier's ladder remain
     /// the guaranteed path, so a cooperative close can never wedge the client.
     private func requestShutdown() async {
-        do {
-            _ = try await requestRaw(
-                method: "shutdown",
-                params: nil,
-                timeout: configuration.shutdownCooperationTimeout
-            )
-        } catch {
-            // deliberately ignored: unsupported (-32601), timed out, or dropped.
+        // watchdog: bound the whole cooperative handshake, not just each leg.
+        // `requestRaw` bounds its own send and response await by the same
+        // timeout, but the outer gate keeps `close()` prompt even if that
+        // invariant ever regresses — the ladder must never wait on the peer.
+        let once = ResumeOnce()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            Task {
+                do {
+                    _ = try await self.requestRaw(
+                        method: "shutdown",
+                        params: nil,
+                        timeout: configuration.shutdownCooperationTimeout
+                    )
+                } catch {
+                    // deliberately ignored: unsupported (-32601), timed out, or dropped.
+                }
+                once.run { continuation.resume() }
+            }
+            Task {
+                try? await Task.sleep(for: configuration.shutdownCooperationTimeout)
+                once.run { continuation.resume() }
+            }
         }
     }
 
@@ -271,15 +286,25 @@ public actor MCPClient {
             timeout: timeout,
             error: duringHandshake ? .negotiationTimeout : .callTimeout
         )
-        try await transport.sendFrame(frame)
-        // Task cancellation of the caller aborts the call: the in-flight entry
-        // is resolved with CancellationError and the peer is told its
-        // invocation is no longer awaited, so the remote tool stops at its
-        // next cooperative suspend point instead of running on with the
-        // caller's identity. The registered entry and the response await race
-        // through the actor's in-flight table (removeValue is exclusive), so
-        // a late reply, a timeout, or a concurrent cancel are all exactly-once.
+        // Task cancellation of the caller aborts the call: from the send on,
+        // the in-flight entry and the response await are covered, the peer is
+        // told its invocation is no longer awaited, and a pre-cancelled
+        // caller never transmits at all. The registered entry and the
+        // response await race through the actor's in-flight table
+        // (removeValue is exclusive), so a late reply, a timeout, or a
+        // concurrent cancel are all exactly-once.
         return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            do {
+                // the send carries the same deadline as the response: a peer
+                // that stops draining its pipe cannot wedge the caller — or,
+                // because a request runs on the actor, every later request —
+                // past the deadline.
+                try await sendFrameWithDeadline(frame, timeout: timeout)
+            } catch {
+                await handleFailedSend(error)
+                throw error
+            }
             try Task.checkCancellation()
             return try await responseTask.value
         } onCancel: {
@@ -310,6 +335,51 @@ public actor MCPClient {
                 }
             }
         }
+    }
+
+    /// Sends one frame to the carrier, bounded by `timeout`.
+    ///
+    /// The carriers' `sendFrame` contract is write-to-completion with real
+    /// backpressure: a peer that stops draining its pipe (a wedged event
+    /// loop, a stopped process, a deadlocked plugin) fills the pipe and the
+    /// write never completes — with no bound, such a peer would hang the
+    /// caller, and every later request with it, past every configured
+    /// deadline. The send and a deadline reaper race a `ResumeOnce`, so
+    /// exactly one outcome is reported and a frame whose write completes
+    /// after the deadline is dropped rather than double-resuming. Mirrors
+    /// `makeResponseTask`; the same rationale against task groups applies.
+    private func sendFrameWithDeadline(_ frame: [UInt8], timeout: Duration) async throws {
+        let once = ResumeOnce()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            Task { [transport, frame] in
+                do {
+                    try await transport.sendFrame(frame)
+                    once.run { continuation.resume() }
+                } catch {
+                    once.run { continuation.resume(throwing: error) }
+                }
+            }
+            Task {
+                try? await Task.sleep(for: timeout)
+                once.run { continuation.resume(throwing: MCPClientError.callTimeout) }
+            }
+        }
+    }
+
+    /// Ends the session after a request whose frame could not be delivered.
+    ///
+    /// A `callTimeout` here means the peer stopped draining entirely — the
+    /// connection is wedged, not slow — so it is torn down (every in-flight
+    /// request fails, the client disconnects, the carrier's termination runs)
+    /// rather than left as a zombie that would fail every future request the
+    /// same way after another full timeout. The carrier's `stop()` matters:
+    /// `close()` skips its stop when the client is already `disconnected`, so
+    /// without it a wedged subprocess child would never be reclaimed. Other
+    /// send errors (`connectionClosed`, `notConnected`) already describe a
+    /// gone peer and conclude with the same idempotent teardown.
+    private func handleFailedSend(_ error: Error) async {
+        await handleTransportClosed()
+        try? await transport.stop()
     }
 
     private func recordInFlight(_ id: JSONRPCID, continuation: CheckedContinuation<[UInt8], Error>) async {
@@ -351,7 +421,10 @@ public actor MCPClient {
             params: ["requestId": AnyCodable(id.wireValue)]
         ))
         if let frame {
-            try? await transport.sendFrame(frame)
+            // bounded: the best-effort cancel must never wedge its own path —
+            // the peer just abandoned for not draining will not take this
+            // frame either.
+            _ = try? await sendFrameWithDeadline(frame, timeout: .seconds(1))
         }
     }
 

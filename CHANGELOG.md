@@ -71,6 +71,17 @@ MCP-by-subprocess via SwiftSlash 5.0 bring-your-own data channels.
 
 ### Fixed
 
+- The client's request deadline now bounds the **send** leg, not just the
+  response await: a peer that stops draining its pipe (wedged event loop,
+  stopped process, deadlocked plugin) previously left `sendFrame`'s
+  write-to-completion hanging the caller — and, running on the client actor,
+  every later request and `close()` with it — past every configured timeout.
+  A send that misses its deadline fails the request with `callTimeout`,
+  tears the wedged connection down through the carrier ladder (reclaiming a
+  wedged subprocess child that a torn-down `close()` would otherwise skip),
+  and `close()`'s cooperative `shutdown` handshake is additionally bounded
+  by a watchdog so the ladder is always reached on time. Regression-tested
+  with a gated carrier that blocks the send path.
 - EOF-ended subprocess sessions leaked the transport's pipe fds and channel
   (retained until `stop()`); they are now released exactly once when the
   child exits — regression-tested with zero per-session fd growth.
