@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.3
 
 import CompilerPluginSupport
 import PackageDescription
@@ -25,7 +25,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/swiftlang/swift-syntax.git",
-            from: "602.0.0"
+            "603.0.0"..<"604.0.0"
         ),
         .package(
             url: "https://github.com/swift-server/swift-service-lifecycle.git",
