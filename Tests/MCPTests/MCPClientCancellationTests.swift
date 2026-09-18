@@ -1,0 +1,197 @@
+//===----------------------------------------------------------------------===//
+//
+// This source file is part of the MCP open source project
+//
+// Copyright (c) 2024 and the MCP project authors
+// Licensed under the MIT License
+//
+// See LICENSE.txt for license information
+//
+//===----------------------------------------------------------------------===//
+
+import Testing
+@testable import MCP
+
+/// Cancellation semantics for client requests: a cancelled caller task must
+/// stop the remote invocation (via `notifications/cancelled`), surface
+/// `CancellationError` promptly, and never disturb sibling calls.
+@Suite(.serialized)
+struct MCPClientCancellationTests {
+
+    @Test("cancelling a callTool task stops the remote invocation")
+    func subprocessCancelStopsRemoteCall() async throws {
+        let transport = try SubprocessClientTransport(
+            configuration: .init(executable: MCPClientTests().fixtureServerPath(), shutdownGrace: .seconds(2))
+        )
+        let client = MCPClient(transport: transport)
+
+        try await client.connect()
+        _ = try await client.listTools()
+
+        let call = Task { try await client.callTool("slow", arguments: ["seconds": 5.0]) }
+        // let the call reach the server before cancelling
+        try await Task.sleep(for: .milliseconds(500))
+        call.cancel()
+
+        let started = ContinuousClock.now
+        do {
+            _ = try await call.value
+            Issue.record("expected CancellationError, got a result")
+        } catch is CancellationError {
+            // expected: the caller's task was cancelled
+        }
+        // prompt: the caller must not wait out the tool's 5s sleep
+        #expect(ContinuousClock.now - started < .seconds(3))
+
+        // end-to-end: the notification reached the tool — the fixture's `slow`
+        // catches CancellationError and writes a marker to stderr.
+        let markerSeen = await MCPClientTests().within(.seconds(6)) {
+            while !transport.stderrTailSnapshot().contains(where: { $0.contains("fixture slow-cancelled") }) {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        #expect(markerSeen == .completed)
+
+        await client.close()
+        #expect(await client.currentState() == .disconnected)
+    }
+
+    @Test("cancelling a network-free call also stops the local invocation")
+    func localCancelStopsLocalInvocation() async throws {
+        // the local carrier is deliberately exercised too: it answers inside
+        // sendFrame (register-before-send ordering) and drives the same router,
+        // so cancellation must work with zero bytes and zero processes.
+        let transport = LocalClientTransport(dispatcher: MCPClientTests.LocalAppDispatcher())
+        let client = MCPClient(transport: transport)
+
+        try await client.connect()
+        _ = try await client.listTools()
+
+        let call = Task { try await client.callTool("slow", arguments: [:]) }
+        try await Task.sleep(for: .milliseconds(300))
+        call.cancel()
+
+        let started = ContinuousClock.now
+        do {
+            _ = try await call.value
+            Issue.record("expected CancellationError, got a result")
+        } catch is CancellationError {
+            // expected: the caller's task was cancelled
+        }
+        #expect(ContinuousClock.now - started < .seconds(3))
+
+        // the 30s slow invocation was interrupted, not left running: a follow-up
+        // call completes promptly instead of queuing behind it.
+        let quickStarted = ContinuousClock.now
+        let greet = try await client.callTool("greet", arguments: ["name": "Taylor"])
+        #expect(greet.flattenedText == "Hello, Taylor!")
+        #expect(ContinuousClock.now - quickStarted < .seconds(5))
+
+        await client.close()
+    }
+
+    @Test("double-cancel yields a single CancellationError")
+    func doubleCancelResolvesExactlyOnce() async throws {
+        let transport = LocalClientTransport(dispatcher: MCPClientTests.LocalAppDispatcher())
+        let client = MCPClient(transport: transport)
+
+        try await client.connect()
+
+        let call = Task { try await client.callTool("slow", arguments: [:]) }
+        try await Task.sleep(for: .milliseconds(300))
+        call.cancel()
+        call.cancel()   // second cancel must be a no-op, not a double-resume
+
+        do {
+            _ = try await call.value
+            Issue.record("expected CancellationError, got a result")
+        } catch is CancellationError {
+            // expected: a single CancellationError, exactly once
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        // exactly-once, and the client is still usable afterwards.
+        try await client.ping()
+        await client.close()
+    }
+
+    @Test("cancelling after completion leaves the result intact")
+    func cancelAfterCompletionIsANoOp() async throws {
+        let transport = LocalClientTransport(dispatcher: MCPClientTests.LocalAppDispatcher())
+        let client = MCPClient(transport: transport)
+
+        try await client.connect()
+
+        let call = Task { try await client.callTool("greet", arguments: ["name": "Taylor"]) }
+        let result = try await call.value
+        #expect(result.flattenedText == "Hello, Taylor!")
+
+        // cancel fires after the operation already completed — the handler is
+        // unregistered, so this must be a harmless no-op.
+        call.cancel()
+        let again = try await client.callTool("greet", arguments: ["name": "Robin"])
+        #expect(again.flattenedText == "Hello, Robin!")
+
+        await client.close()
+    }
+
+    @Test("cancel racing the timeout resolves exactly once")
+    func cancelRacingTimeoutResolvesExactlyOnce() async throws {
+        var configuration = MCPClient.ClientConfiguration()
+        configuration.callTimeout = .milliseconds(250)
+        let transport = LocalClientTransport(dispatcher: MCPClientTests.LocalAppDispatcher())
+        let client = MCPClient(transport: transport, configuration: configuration)
+
+        try await client.connect()
+
+        let call = Task { try await client.callTool("slow", arguments: [:]) }
+        // cancel while the timeout reaper is still in flight — either resolver
+        // may win, but exactly one may resolve the waiter.
+        try await Task.sleep(for: .milliseconds(50))
+        call.cancel()
+
+        do {
+            _ = try await call.value
+            Issue.record("expected a cancellation or timeout error")
+        } catch is CancellationError {
+            // expected: the caller's cancel won
+        } catch MCPClientError.callTimeout {
+            // expected: the deadline reaper won
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        // the client remains fully usable regardless of which resolver won.
+        try await client.ping()
+        await client.close()
+    }
+
+    @Test("cancelling one call leaves a concurrent call untouched")
+    func cancellingOneCallLeavesSiblingUntouched() async throws {
+        let transport = LocalClientTransport(dispatcher: MCPClientTests.LocalAppDispatcher())
+        let client = MCPClient(transport: transport)
+
+        try await client.connect()
+
+        let slow = Task { try await client.callTool("slow", arguments: [:]) }
+        let fast = Task { try await client.callTool("greet", arguments: ["name": "Taylor"]) }
+        try await Task.sleep(for: .milliseconds(300))
+        slow.cancel()
+
+        // the sibling completes with its own result, undisturbed by the cancel.
+        let started = ContinuousClock.now
+        let result = try await fast.value
+        #expect(result.flattenedText == "Hello, Taylor!")
+        #expect(ContinuousClock.now - started < .seconds(5))
+
+        do {
+            _ = try await slow.value
+            Issue.record("expected CancellationError, got a result")
+        } catch is CancellationError {
+            // expected
+        }
+
+        await client.close()
+    }
+}

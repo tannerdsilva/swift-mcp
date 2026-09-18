@@ -1,6 +1,15 @@
 {
-  "originHash" : "45654807ebe75b29645a69aea1406cce8f1f9cc12a47b2ecb97a5ae633dce528",
+  "originHash" : "9b7d031af7965dc96966975d1a75f5ed7eaecd6965da92f017e77406d6933550",
   "pins" : [
+    {
+      "identity" : "quickjson",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tannerdsilva/QuickJSON.git",
+      "state" : {
+        "revision" : "5e5b769d55248ed41acb42ac8806c1675461200f",
+        "version" : "2.0.1"
+      }
+    },
     {
       "identity" : "swift-async-algorithms",
       "kind" : "remoteSourceControl",
@@ -76,10 +85,10 @@
     {
       "identity" : "swift-syntax",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "location" : "https://github.com/apple/swift-syntax.git",
       "state" : {
-        "revision" : "4799286537280063c85a32f09884cfbca301b1a1",
-        "version" : "602.0.0"
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
       }
     },
     {
@@ -89,6 +98,24 @@
       "state" : {
         "revision" : "704705c5c51156ede21172a38654d522ce487074",
         "version" : "1.8.0"
+      }
+    },
+    {
+      "identity" : "swiftslash",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tannerdsilva/SwiftSlash.git",
+      "state" : {
+        "revision" : "f39b763a6c3f708d222ec28620525ebf08d33e7d",
+        "version" : "5.0.0"
+      }
+    },
+    {
+      "identity" : "yyjson",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ibireme/yyjson.git",
+      "state" : {
+        "revision" : "8b4a38dc994a110abaec8a400615567bd996105f",
+        "version" : "0.12.0"
       }
     }
   ],

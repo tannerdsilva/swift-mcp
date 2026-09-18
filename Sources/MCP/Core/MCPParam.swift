@@ -81,6 +81,14 @@ public struct MCPParameterInfo: Sendable, Equatable, Codable {
     /// constraint, telling clients which values are accepted.
     public let enumValues: [String]?
 
+    /// The parameter's default value, when the macro could statically evaluate
+    /// its initializer literal at compile time, otherwise `nil`.
+    ///
+    /// When present, the value is included in the JSON Schema as a `default`
+    /// hint so clients (and LLMs) see what the server applies when the
+    /// argument is omitted.
+    public let defaultValue: AnyCodable?
+
     /// Creates a new parameter info value.
     ///
     /// - Parameters:
@@ -91,6 +99,7 @@ public struct MCPParameterInfo: Sendable, Equatable, Codable {
     ///   - typeName: The Swift type name.
     ///   - hasDefault: Whether the parameter has a default value.
     ///   - enumValues: Allowed values for enum-typed parameters, or `nil`.
+    ///   - defaultValue: The statically evaluated default value, or `nil`.
     public init(
         name: String,
         description: String?,
@@ -98,7 +107,8 @@ public struct MCPParameterInfo: Sendable, Equatable, Codable {
         kind: MCPParamKind,
         typeName: String,
         hasDefault: Bool,
-        enumValues: [String]? = nil
+        enumValues: [String]? = nil,
+        defaultValue: AnyCodable? = nil
     ) {
         self.name = name
         self.description = description
@@ -107,6 +117,7 @@ public struct MCPParameterInfo: Sendable, Equatable, Codable {
         self.typeName = typeName
         self.hasDefault = hasDefault
         self.enumValues = enumValues
+        self.defaultValue = defaultValue
     }
 }
 

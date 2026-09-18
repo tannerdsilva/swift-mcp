@@ -1,3 +1,4 @@
+import SwiftParser
 import SwiftSyntax
 
 // MARK: - Shared codegen helpers
@@ -64,7 +65,8 @@ func parameterInfoExpression(
     typeName: String,
     kind: WrapperKind,
     description: String?,
-    enumValues: [String]?
+    enumValues: [String]?,
+    defaultValueExpression: String? = nil
 ) -> String? {
     let kindName: String
     let required: Bool
@@ -89,8 +91,53 @@ func parameterInfoExpression(
     let typeNameLiteral = kind == .flag ? "\"Bool\"" : "\"\(escapeStringLiteral(normalizedTypeName(typeName)))\""
     let descriptionArg = description.map { "description: \"\(escapeStringLiteral($0))\"" } ?? "description: nil"
     let enumArg = enumValues.map { "enumValues: \($0)" } ?? "enumValues: nil"
+    // only optional params (.option/.flag) advertise the default — a required
+    // @Argument's initializer is an init value, not an omitted-argument default.
+    let defaultArg = (kind == .option || kind == .flag)
+        ? (defaultValueExpression.map { "defaultValue: AnyCodable(\($0))" } ?? "")
+        : ""
 
-    return "MCPParameterInfo(name: \"\(escapeStringLiteral(name))\", \(descriptionArg), required: \(required), kind: \(kindName), typeName: \(typeNameLiteral), hasDefault: \(hasDefault), \(enumArg))"
+    return "MCPParameterInfo(name: \"\(escapeStringLiteral(name))\", \(descriptionArg), required: \(required), kind: \(kindName), typeName: \(typeNameLiteral), hasDefault: \(hasDefault), \(enumArg)\(defaultArg.isEmpty ? "" : ", " + defaultArg))"
+}
+
+// Evaluates a property initializer expression to a Swift literal expression
+// that AnyCodable can carry, when the initializer is statically evaluable.
+// Only simple integer, float, string, bool, and negated-numeric literals are
+// recognized; anything else (enum cases, expressions, member references)
+// produces nil so the schema simply omits the `default` hint rather than
+// guessing. Parsing through the Swift parser keeps the recognition exact.
+func literalDefaultExpression(from expression: String?) -> String? {
+    guard let expression else { return nil }
+    // The parser wraps a lone literal in an expression statement; unwrap it.
+    guard let statement = Parser.parse(source: expression).statements.first,
+          let expr = statement.item.as(ExprSyntax.self) else {
+        return nil
+    }
+    if let integer = expr.as(IntegerLiteralExprSyntax.self) {
+        return integer.literal.text
+    }
+    if let float = expr.as(FloatLiteralExprSyntax.self) {
+        return float.literal.text
+    }
+    if let boolean = expr.as(BooleanLiteralExprSyntax.self) {
+        return boolean.literal.text
+    }
+    if let string = expr.as(StringLiteralExprSyntax.self),
+       let segment = string.segments.first?.as(StringSegmentSyntax.self) {
+        return "\"\(escapeStringLiteral(segment.content.text))\""
+    }
+    // Negative numeric literals (e.g. `-5`, `-1.5`) parse as prefix operators.
+    if let prefix = expr.as(PrefixOperatorExprSyntax.self),
+       prefix.operator.text == "-" {
+        if let integer = prefix.expression.as(IntegerLiteralExprSyntax.self) {
+            return "-\(integer.literal.text)"
+        }
+        if let float = prefix.expression.as(FloatLiteralExprSyntax.self) {
+            return "-\(float.literal.text)"
+        }
+    }
+    // Nil defaults are encoded as `nil` anyway; skip them.
+    return nil
 }
 
 // Builds the body expression for a generated `discoverParameters()`.
@@ -106,7 +153,8 @@ func generateDiscoveryExpression(properties: [PropertyInfo]) -> String {
             typeName: prop.type,
             kind: prop.wrapperKind,
             description: prop.description,
-            enumValues: prop.enumValues
+            enumValues: prop.enumValues,
+            defaultValueExpression: literalDefaultExpression(from: prop.initializerExpr)
         ) {
             parts.append("[\(expr)]")
         }

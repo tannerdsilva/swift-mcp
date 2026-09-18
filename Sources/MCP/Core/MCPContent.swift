@@ -169,6 +169,29 @@ public struct MCPToolResult: Sendable, Codable {
     public static func error(_ message: String) -> MCPToolResult {
         MCPToolResult(content: [.text(message)], isError: true)
     }
+
+    /// A single text rendering of the result, for string-consuming adapters
+    /// (e.g. a harness `ToolEntry` whose handler returns `String`).
+    ///
+    /// Concatenates every `.text` block newline-separated; non-text blocks
+    /// (images, resources) are summarized by their kind so nothing is silently
+    /// dropped. When ``isError`` is `true` the text is prefixed with `error: `
+    /// so the consumer can distinguish a failed invocation from success text.
+    public var flattenedText: String {
+        var parts: [String] = []
+        for block in content {
+            switch block {
+            case .text(let text):
+                parts.append(text)
+            case .image:
+                parts.append("[image content]")
+            case .resource(let uri, _, _):
+                parts.append("[resource: \(uri)]")
+            }
+        }
+        let text = parts.joined(separator: "\n")
+        return isError ? "error: \(text)" : text
+    }
 }
 
 /// The JSON `null` marker carried by ``AnyCodable``.
@@ -190,7 +213,7 @@ struct JSONNull: Sendable, Hashable {}
 ///
 /// This is used internally by the framework for JSON-RPC message serialization
 /// where the exact types are not known at compile time.
-public struct AnyCodable: Codable, @unchecked Sendable {
+public struct AnyCodable: Codable, @unchecked Sendable, Equatable {
     /// The wrapped value.
     public let value: Any
 
@@ -200,6 +223,29 @@ public struct AnyCodable: Codable, @unchecked Sendable {
     ///   for proper round-trip encoding/decoding.
     public init(_ value: Any) {
         self.value = value
+    }
+
+    /// Value equality over the wrapped payloads (dictionaries and arrays
+    /// compare structurally; two `JSONNull`s are equal).
+    public static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
+        switch (lhs.value, rhs.value) {
+        case let (l, r) as (Int, Int): return l == r
+        case let (l, r) as (Double, Double): return l == r
+        case let (l, r) as (String, String): return l == r
+        case let (l, r) as (Bool, Bool): return l == r
+        case (_, _) as (JSONNull, JSONNull): return true
+        case let (l, r) as ([String: Any], [String: Any]):
+            guard l.count == r.count else { return false }
+            for (key, lhsValue) in l {
+                guard let rhsValue = r[key] else { return false }
+                if AnyCodable(lhsValue) != AnyCodable(rhsValue) { return false }
+            }
+            return true
+        case let (l, r) as ([Any], [Any]):
+            guard l.count == r.count else { return false }
+            return zip(l, r).allSatisfy { AnyCodable($0) == AnyCodable($1) }
+        default: return false
+        }
     }
 
     /// Encodes the wrapped value to the given encoder.

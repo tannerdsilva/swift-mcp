@@ -141,7 +141,7 @@ func mcpCommandWithOption() {
             }
         
             public static func discoverParameters() -> [MCPParameterInfo] {
-                [] + [MCPParameterInfo(name: "count", description: "Count", required: false, kind: .option, typeName: "Int", hasDefault: true, enumValues: nil)]
+                [] + [MCPParameterInfo(name: "count", description: "Count", required: false, kind: .option, typeName: "Int", hasDefault: true, enumValues: nil, defaultValue: AnyCodable(1))]
             }
         
             public mutating func apply(arguments: [String: Any]) throws {
@@ -192,7 +192,7 @@ func mcpCommandWithFlag() {
             }
         
             public static func discoverParameters() -> [MCPParameterInfo] {
-                [] + [MCPParameterInfo(name: "verbose", description: "Verbose mode", required: false, kind: .flag, typeName: "Bool", hasDefault: true, enumValues: nil)]
+                [] + [MCPParameterInfo(name: "verbose", description: "Verbose mode", required: false, kind: .flag, typeName: "Bool", hasDefault: true, enumValues: nil, defaultValue: AnyCodable(false))]
             }
         
             public mutating func apply(arguments: [String: Any]) throws {
@@ -306,7 +306,7 @@ func mcpCommandMixed() {
             }
         
             public static func discoverParameters() -> [MCPParameterInfo] {
-                [] + [MCPParameterInfo(name: "input", description: "Required input", required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil)] + [MCPParameterInfo(name: "multiplier", description: "Optional multiplier", required: false, kind: .option, typeName: "Int", hasDefault: true, enumValues: nil)] + [MCPParameterInfo(name: "verbose", description: "Enable verbose output", required: false, kind: .flag, typeName: "Bool", hasDefault: true, enumValues: nil)]
+                [] + [MCPParameterInfo(name: "input", description: "Required input", required: true, kind: .argument, typeName: "String", hasDefault: false, enumValues: nil)] + [MCPParameterInfo(name: "multiplier", description: "Optional multiplier", required: false, kind: .option, typeName: "Int", hasDefault: true, enumValues: nil, defaultValue: AnyCodable(1))] + [MCPParameterInfo(name: "verbose", description: "Enable verbose output", required: false, kind: .flag, typeName: "Bool", hasDefault: true, enumValues: nil, defaultValue: AnyCodable(false))]
             }
         
             public mutating func apply(arguments: [String: Any]) throws {
@@ -425,7 +425,7 @@ func mcpCommandWithEnumValues() {
             }
         
             public static func discoverParameters() -> [MCPParameterInfo] {
-                [] + [MCPParameterInfo(name: "level", description: "Log level", required: false, kind: .option, typeName: "String", hasDefault: true, enumValues: ["debug", "info", "warning", "error"])]
+                [] + [MCPParameterInfo(name: "level", description: "Log level", required: false, kind: .option, typeName: "String", hasDefault: true, enumValues: ["debug", "info", "warning", "error"], defaultValue: AnyCodable("info"))]
             }
         
             public mutating func apply(arguments: [String: Any]) throws {
@@ -473,7 +473,7 @@ func mcpOptionGroupMacro() {
 
         extension SharedOptions: StaticMCPGroup {
             public static var mcpParameters: [MCPParameterInfo] {
-                [] + [MCPParameterInfo(name: "verbose", description: "Verbose output", required: false, kind: .option, typeName: "Bool", hasDefault: true, enumValues: nil)] + [MCPParameterInfo(name: "outputPath", description: "Output path", required: false, kind: .option, typeName: "String", hasDefault: true, enumValues: nil)]
+                [] + [MCPParameterInfo(name: "verbose", description: "Verbose output", required: false, kind: .option, typeName: "Bool", hasDefault: true, enumValues: nil, defaultValue: AnyCodable(false))] + [MCPParameterInfo(name: "outputPath", description: "Output path", required: false, kind: .option, typeName: "String", hasDefault: true, enumValues: nil, defaultValue: AnyCodable("."))]
             }
 
             public mutating func mcpApply(arguments: [String: Any]) throws {
@@ -1348,7 +1348,7 @@ func mcpCommandOptionalOnlyHasNoSetParams() {
             }
         
             public static func discoverParameters() -> [MCPParameterInfo] {
-                [] + [MCPParameterInfo(name: "count", description: nil, required: false, kind: .option, typeName: "Int", hasDefault: true, enumValues: nil)] + [MCPParameterInfo(name: "verbose", description: nil, required: false, kind: .flag, typeName: "Bool", hasDefault: true, enumValues: nil)]
+                [] + [MCPParameterInfo(name: "count", description: nil, required: false, kind: .option, typeName: "Int", hasDefault: true, enumValues: nil, defaultValue: AnyCodable(1))] + [MCPParameterInfo(name: "verbose", description: nil, required: false, kind: .flag, typeName: "Bool", hasDefault: true, enumValues: nil, defaultValue: AnyCodable(false))]
             }
         
             public mutating func apply(arguments: [String: Any]) throws {

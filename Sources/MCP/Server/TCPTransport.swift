@@ -16,131 +16,6 @@ import NIOPosix
 import QuickJSON
 import Synchronization
 
-// MARK: - Channel Handler
-
-/// A channel handler that reads newline-delimited JSON messages from a TCP
-/// connection and forwards them to the MCP message handler via an actor for
-/// serialized processing.
-///
-/// - Note: marked `Sendable` because NIO's `childChannelInitializer` closure
-///   is `@Sendable`; all mutable state stays on the event loop.
-final class MCPMessageHandler: ChannelInboundHandler, @unchecked Sendable {
-    typealias InboundIn = ByteBuffer
-
-    private let handler: @Sendable ([UInt8], MCPCallerInfo) async throws -> [UInt8]?
-    private let caller: MCPCallerInfo
-    private let logger: Logger?
-    private let maxMessageSize: Int
-    private var buffer: ByteBuffer?
-    private var actor: TransportMessageHandler?
-
-    init(
-        handler: @escaping @Sendable ([UInt8], MCPCallerInfo) async throws -> [UInt8]?,
-        caller: MCPCallerInfo,
-        logger: Logger? = nil,
-        maxMessageSize: Int
-    ) {
-        self.handler = handler
-        self.caller = caller
-        self.logger = logger
-        self.maxMessageSize = maxMessageSize
-    }
-
-    func channelActive(context: ChannelHandlerContext) {
-        let channel = context.channel
-        let handler = self.handler
-        let caller = self.caller
-        let logger = self.logger
-        self.actor = TransportMessageHandler(
-            handler: handler,
-            caller: caller,
-            write: { bytes in
-                var buf = channel.allocator.buffer(capacity: bytes.count + 1)
-                buf.writeBytes(bytes)
-                buf.writeInteger(UInt8(0x0A)) // newline
-                channel.writeAndFlush(buf, promise: nil)
-            },
-            makeError: { requestBytes, error in
-                guard let request = try? QuickJSON.decode(JSONRPCRequest.self, from: requestBytes) else {
-                    // Without an id there is no frame to reply to.
-                    return nil
-                }
-                do {
-                    let response = JSONRPCErrorResponse(
-                        id: request.id,
-                        code: -32603,
-                        message: "Internal error: \(readableErrorDescription(error))"
-                    )
-                    return try QuickJSON.encode(response)
-                } catch {
-                    // A fixed-shape error frame cannot realistically fail to encode.
-                    logger?.warning("Failed to encode TCP error response: \(error)")
-                    return nil
-                }
-            }
-        )
-    }
-
-    func channelInactive(context: ChannelHandlerContext) {
-        Task { [actor] in
-            await actor?.cancel()
-        }
-    }
-
-    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        var inboundData = unwrapInboundIn(data)
-
-        // If we have a leftover buffer from a previous read, prepend it
-        if var existing = buffer {
-            existing.writeBuffer(&inboundData)
-            inboundData = existing
-            buffer = nil
-        }
-
-        guard let actor = self.actor else { return }
-
-        // Process complete lines
-        while let lineEnd = inboundData.readableBytesOfNewline() {
-            guard let lineData = inboundData.readBytes(length: lineEnd) else {
-                continue
-            }
-            // Skip the newline bytes
-            inboundData.moveReaderIndex(forwardBy: 1)
-
-            // Dispatch to the actor for serialized processing
-            Task { await actor.process(lineData) }
-        }
-
-        // A leftover partial frame larger than the cap is a single unbounded
-        // message; reject it and close the connection rather than buffering
-        // without bound.
-        if inboundData.readableBytes > maxMessageSize {
-            logger?.warning("TCP message exceeds maximum size (\(maxMessageSize) bytes); closing connection")
-            if let errorData = try? QuickJSON.encode(
-                JSONRPCErrorResponse(id: .null, code: -32700, message: "Message too large")
-            ) {
-                var out = context.channel.allocator.buffer(capacity: errorData.count + 1)
-                out.writeBytes(errorData)
-                out.writeInteger(UInt8(0x0A))
-                context.channel.writeAndFlush(out, promise: nil)
-            }
-            buffer = nil
-            context.close(promise: nil)
-            return
-        }
-
-        // Store remaining bytes for next read
-        if inboundData.readableBytes > 0 {
-            buffer = inboundData
-        }
-    }
-
-    func errorCaught(context: ChannelHandlerContext, error: Error) {
-        logger?.warning("Channel error: \(error)")
-        context.close(promise: nil)
-    }
-}
-
 // MARK: - TCP Transport
 
 /// Implemented by transports that can report the address they bound to.
@@ -200,6 +75,9 @@ public final class TCPTransport: MCPTransport, MCPTransportAddressProviding, @un
     /// bounding per-connection memory on the TCP transport.
     public static let defaultMaxMessageSize: Int = 10 * 1024 * 1024
     private let maxMessageSize: Int
+    /// The pre-encoded `-32700 Message too large` error frame handed to the
+    /// shared frame codec.
+    private let oversizeErrorFrame: [UInt8]
     /// The address the server channel bound to, once started.
     ///
     /// Useful when binding an ephemeral port (`ServerAddress.hostname("127.0.0.1", port: 0)`);
@@ -266,6 +144,8 @@ public final class TCPTransport: MCPTransport, MCPTransportAddressProviding, @un
         self.allowIPv4MappedIPv6 = allowIPv4MappedIPv6
         self.accessResolver = accessResolver
         self.maxMessageSize = maxMessageSize
+        self.oversizeErrorFrame =
+            (try? QuickJSON.encode(JSONRPCErrorResponse(id: .null, code: -32700, message: "Message too large"))) ?? []
         self.logger = logger
     }
 
@@ -282,16 +162,18 @@ public final class TCPTransport: MCPTransport, MCPTransportAddressProviding, @un
         let bootstrap = ServerBootstrap(group: eventLoopGroup)
             .serverChannelOption(ChannelOptions.backlog, value: 256)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { [accessResolver, handler, logger, maxMessageSize] channel in
+            .childChannelInitializer { [accessResolver, handler, logger, maxMessageSize, oversizeErrorFrame] channel in
                 let remoteAddress = channel.remoteAddress?.description ?? "unknown"
                 let accessLevel = accessResolver(remoteAddress)
                 let caller = MCPCallerInfo(sourceAddress: remoteAddress, accessLevel: accessLevel)
-                return channel.pipeline.addHandler(
-                    MCPMessageHandler(handler: handler, caller: caller, logger: logger, maxMessageSize: maxMessageSize)
+                return channel.pipeline.addHandlers(
+                    MCPFrameCodec(maxMessageSize: maxMessageSize, oversizeErrorFrame: oversizeErrorFrame),
+                    MCPMessageHandler(handler: handler, caller: caller, logger: logger)
                 )
             }
             .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelOption(ChannelOptions.autoRead, value: false)
 
         // Configure dual-stack support
         let bootstrapWithOptions: ServerBootstrap
@@ -362,18 +244,5 @@ public final class TCPTransport: MCPTransport, MCPTransportAddressProviding, @un
         }
 
         try await activeChannel?.close(mode: .all)
-    }
-}
-
-// MARK: - ByteBuffer Helpers
-
-extension ByteBuffer {
-    /// Returns the number of readable bytes up to and including the first
-    /// newline character (0x0A), or `nil` if no newline is found.
-    fileprivate func readableBytesOfNewline() -> Int? {
-        let readable = self.withUnsafeReadableBytes { ptr in
-            ptr.firstIndex(of: 0x0A)
-        }
-        return readable
     }
 }
