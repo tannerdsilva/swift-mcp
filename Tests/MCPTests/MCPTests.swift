@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Logging
 import QuickJSON
 @testable import MCP
 
@@ -2786,4 +2787,45 @@ func idlessFramesStaySilent() async throws {
     try await server.runService()
 
     #expect(transport.sentMessages.isEmpty)
+}
+
+// MARK: - Router Catalog Extraction Tests
+
+/// The router's extracted catalog builder — the single schema path that feeds
+/// both `tools/list` and the facade's introspection.
+@Test("router catalog(for:) merges dispatcher-first and matches the tools/list wire output")
+func routerCatalogMatchesWireOutput() async throws {
+    let router = MCPMessageRouter(
+        name: "catalog-test",
+        version: "1.0.0",
+        logger: Logger(label: "test.catalog"),
+        dispatcher: MCPClientTests.LocalAppDispatcher()
+    )
+    router.registerInstance("greet-extra", instance: Greet())
+    let caller = MCPCallerInfo(sourceAddress: "test", accessLevel: .root)
+
+    let catalog = router.catalog(for: caller)
+
+    // dispatcher-first merge: the dispatcher's two descriptors, then the
+    // instance-registered dynamic tool.
+    #expect(catalog.map(\.name) == ["greet", "slow", "greet-extra"])
+
+    // every schema in the catalog must equal the live tools/list output
+    // (semantic comparison — JSON object key order is not significant).
+    let wire = try await router.route(
+        encodeFrame(["jsonrpc": "2.0", "id": 1, "method": "tools/list"]),
+        caller: caller
+    )
+    let wireTools = ((decodeFrame(wire ?? []) as? [String: Any])?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+    #expect(wireTools?.count == catalog.count)
+    for (index, definition) in catalog.enumerated() {
+        let wireTool = wireTools?[index] as? [String: Any] ?? [:]
+        #expect(wireTool["name"] as? String == definition.name)
+
+        let encodedSchema = try QuickJSON.encode(definition.inputSchema)
+        let decodedSchema = try QuickJSON.decode(AnyCodable.self, from: encodedSchema)
+        let catalogSchema = decodedSchema.value as? [String: Any] ?? [:]
+        let wireSchema = wireTool["inputSchema"] as? [String: Any] ?? [:]
+        #expect(AnyCodable(wireSchema) == AnyCodable(catalogSchema))
+    }
 }

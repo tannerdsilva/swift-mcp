@@ -306,7 +306,7 @@ final class MCPMessageRouter: @unchecked Sendable {
             // the method answer -32601 and both sides keep the EOF path.
             response = makeSuccessResponse(id: requestID, result: [String: AnyCodable]())
         case .toolsList:
-            response = try await handleToolsList(id: requestID, caller: caller)
+            response = handleToolsList(id: requestID, caller: caller)
         case .toolsCall:
             response = try await handleToolsCall(params: params, id: requestID, caller: caller)
         case .initialized, .cancelled:
@@ -366,9 +366,22 @@ final class MCPMessageRouter: @unchecked Sendable {
 
     /// Handles the `tools/list` request.
     ///
-    /// Builds a list of tool definitions with auto-generated JSON Schema
-    /// for each registered tool that the caller has access to.
-    private func handleToolsList(id: JSONRPCID, caller: MCPCallerInfo) async throws -> [UInt8] {
+    /// Serves the caller-filtered catalog built by ``catalog(for:)``.
+    private func handleToolsList(id: JSONRPCID, caller: MCPCallerInfo) -> [UInt8] {
+        makeSuccessResponse(id: id, result: ToolsListResult(tools: catalog(for: caller)))
+    }
+
+    /// The caller-filtered tool catalog: one schema path for every consumer.
+    ///
+    /// Dispatcher descriptors (macro-generated, typed) come first — the
+    /// generated implementation filters by the caller's access level itself.
+    /// Type- and instance-registered dynamic tools follow, each filtered by
+    /// its own `requiredAccess` and carrying its auto-generated JSON Schema.
+    ///
+    /// This is what `tools/list` serializes on the wire and what the facade's
+    /// introspection (`--mcp-list` and manifest emission) reads, so a binary's
+    /// live catalog and its self-description cannot drift.
+    func catalog(for caller: MCPCallerInfo) -> [MCPToolDefinition] {
         var toolDefinitions: [MCPToolDefinition] = []
 
         // Dispatcher (macro-generated, typed) catalog first — the generated
@@ -410,7 +423,7 @@ final class MCPMessageRouter: @unchecked Sendable {
             )
         }
 
-        return makeSuccessResponse(id: id, result: ToolsListResult(tools: toolDefinitions))
+        return toolDefinitions
     }
 
     /// Converts a compile-time-known tool descriptor into a wire definition.
