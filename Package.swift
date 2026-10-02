@@ -62,6 +62,19 @@ let package = Package(
             ]
         ),
 
+        // --- Test fixture stdin tool ---
+        //
+        // a compiled `interface: .oneShot` binary spawned by the end-to-end
+        // suite: plugin envelope, JSON-RPC, introspection, exit contract.
+        // not part of the library.
+        .executableTarget(
+            name: "MCPFixtureTool",
+            dependencies: ["MCP"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+
         // --- Main MCP library ---
         .target(
             name: "MCP",
