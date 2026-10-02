@@ -56,6 +56,9 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
         // Extract macro arguments
         let serverName = extractStringArgument(from: node, name: "name") ?? ""
         let serverVersion = extractStringArgument(from: node, name: "version") ?? ""
+        let serverDescription = extractStringArgument(from: node, name: "description") ?? ""
+        let interfaceArg = extractExpressionArgument(from: node, name: "interface")
+        let isOneShot = interfaceArg.map { trimmed($0) == ".oneShot" || trimmed($0).hasSuffix(".oneShot") } ?? false
         let addressArg = extractExpressionArgument(from: node, name: "address")
         let transportArg = extractExpressionArgument(from: node, name: "transport")
         let maxMessageSizeArg = extractIntArgument(from: node, name: "maxMessageSize")
@@ -63,6 +66,18 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
         if addressArg != nil && transportArg != nil {
             throw MacroError.message(
                 "@MCPApplication: specify either 'address' or 'transport', not both"
+            )
+        }
+
+        if isOneShot, addressArg != nil {
+            throw MacroError.message(
+                "@MCPApplication: 'interface: .oneShot' cannot bind an 'address' — a one-shot tool serves stdin"
+            )
+        }
+
+        if isOneShot, transportArg != nil {
+            throw MacroError.message(
+                "@MCPApplication: 'interface: .oneShot' cannot take a custom 'transport' — the one-shot host owns its stdio carrier"
             )
         }
 
@@ -103,6 +118,8 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
             structName: structName,
             serverName: serverName,
             serverVersion: serverVersion,
+            serverDescription: serverDescription,
+            isOneShot: isOneShot,
             addressArg: addressArg,
             transportArg: transportArg,
             maxMessageSizeArg: maxMessageSizeArg
@@ -393,14 +410,32 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
     /// The server is constructed with the app as its ``MCPToolDispatcher`` —
     /// no registration loop, no existential tool array. The dispatcher feeds
     /// both `tools/list` and `tools/call`.
+    ///
+    /// With `interface: .oneShot` the entry point is a stdin tool host
+    /// instead: ``MCPStdinHost`` serves harness frames and introspection, and
+    /// ``MCPStdinHost/runMain()`` maps failures onto the exit contract
+    /// (generated code cannot add the C imports that exit-mapping needs, so
+    /// the mapping lives in the framework).
     static func generateMain(
         structName: String,
         serverName: String,
         serverVersion: String,
+        serverDescription: String,
+        isOneShot: Bool,
         addressArg: String?,
         transportArg: String?,
         maxMessageSizeArg: Int?
     ) -> String {
+        if isOneShot {
+            return """
+            /// Generated entry point for the MCP one-shot stdin tool.
+            static func main() async {
+                let app = \(structName)()
+                await MCPStdinHost(name: "\(serverName)", version: "\(serverVersion)", description: "\(escapeStringLiteral(serverDescription))", dispatcher: app).runMain()
+            }
+            """
+        }
+
         let serverInit: String
         if let transport = transportArg {
             serverInit = "let server = MCPServer(name: \"\(serverName)\", version: \"\(serverVersion)\", transport: \(transport), dispatcher: app)"

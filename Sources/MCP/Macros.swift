@@ -115,6 +115,21 @@ public macro MCPCommand(
 @attached(extension, conformances: StaticMCPGroup, names: named(mcpParameters), named(mcpApply))
 public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOptionGroupMacro")
 
+/// The binary shape an ``MCPApplication`` compiles into.
+///
+/// The shape is chosen at compile time: `interface: .session` (the default)
+/// generates a session server entry; `interface: .oneShot` generates a stdin
+/// tool entry.
+public enum MCPInterface: Sendable {
+    /// A session server over stdio or a bound address — the default shape.
+    case session
+
+    /// A one-shot stdin tool host: harness frames in, results out, no session,
+    /// plus self-description (`--mcp-list`, `--mcp-manifest <name>`). See the
+    /// `StdinTools` documentation article.
+    case oneShot
+}
+
 /// A macro that generates a typed ``MCPToolDispatcher``, a `ToolID` enum, and
 /// exhaustive dispatch for an MCP server application.
 ///
@@ -202,11 +217,34 @@ public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOp
 ///     @Tool var greet = Greet()
 /// }
 /// ```
+///
+/// ## Description
+///
+/// The optional `description` names the binary for harness introspection
+/// (`--mcp-list` / `--mcp-manifest`). It does not affect session serving.
+///
+/// ## One-Shot Tools
+///
+/// Pass `interface: .oneShot` to compile the binary as a **stdin tool**
+/// instead of a session server: the generated `main()` runs an ``MCPStdinHost``
+/// that answers harness frames (the plugin envelope, JSON-RPC, or both) and
+/// serves its own introspection — see the `StdinTools` documentation article.
+/// A one-shot binary cannot bind an `address` or take a custom `transport`;
+/// those combinations are rejected with a diagnostic.
+///
+/// ```swift
+/// @MCPApplication(name: "my-tool", version: "1.0.0", interface: .oneShot)
+/// struct MyTool {
+///     @Tool var greet = Greet()
+/// }
+/// ```
 @attached(member, names: named(main), named(callTool), named(_invokeTool), named(toolID), named(requiredAccess), named(toolCatalog), arbitrary)
 @attached(extension, conformances: MCPToolDispatcher)
 public macro MCPApplication(
     name: String,
     version: String,
+    description: String = "",
+    interface: MCPInterface = .session,
     address: ServerAddress? = nil,
     transport: (any MCPTransport)? = nil
 ) = #externalMacro(module: "MCPMacros", type: "MCPApplicationMacro")

@@ -1597,3 +1597,55 @@ func funcToolVariadicParamRejected() {
         macros: ["FuncTool": ToolMacro.self]
     )
 }
+
+// MARK: - MCPApplication one-shot interface
+
+@Test("MCPApplication with interface: .oneShot generates the stdin tool entry")
+func mcpApplicationOneShotInterface() {
+    let source = """
+    @MCPApplication(name: "test", version: "1.0.0", description: "one-shot fixture", interface: .oneShot)
+    struct MyApp {
+        @Tool var greet = Greet()
+    }
+    """
+    let file = Parser.parse(source: source)
+    let context = BasicMacroExpansionContext()
+    let expanded = file.expand(
+        macros: ["MCPApplication": MCPApplicationMacro.self],
+        contextGenerator: { _ in context }
+    )
+    let text = "\(expanded)"
+
+    // the one-shot entry constructs the stdin host and runs the exit-mapped main.
+    #expect(text.contains("MCPStdinHost(name: \"test\", version: \"1.0.0\", description: \"one-shot fixture\", dispatcher: app)"))
+    #expect(text.contains("runMain()"))
+    // and it is NOT a session server binary.
+    #expect(!text.contains("MCPServer("))
+
+    for diagnostic in context.diagnostics {
+        Issue.record("macro emitted diagnostic: \(diagnostic.message)")
+    }
+    #expect(!Parser.parse(source: text).hasError)
+}
+
+@Test("MCPApplication interface: .oneShot rejects address binding and custom transports")
+func mcpApplicationOneShotRejectsNetworkShapes() {
+    assertMCPExpansionFails(
+        """
+        @MCPApplication(name: "test", version: "1.0.0", interface: .oneShot, address: .localhostIPv4(port: 8080))
+        struct MyApp {
+            @Tool var greet = Greet()
+        }
+        """,
+        macros: ["MCPApplication": MCPApplicationMacro.self]
+    )
+    assertMCPExpansionFails(
+        """
+        @MCPApplication(name: "test", version: "1.0.0", interface: .oneShot, transport: StdioTransport())
+        struct MyApp {
+            @Tool var greet = Greet()
+        }
+        """,
+        macros: ["MCPApplication": MCPApplicationMacro.self]
+    )
+}
