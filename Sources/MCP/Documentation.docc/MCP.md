@@ -24,6 +24,10 @@ the wire: it serves tools and consumes them as a client.
   subprocess (``SubprocessClientTransport`` — MCP-by-subprocess), over TCP
   (``TCPClientTransport``), or in-process, with per-call deadlines and
   protocol-version negotiation.
+- **One-shot stdin tools**: `interface: .oneShot` on `@MCPApplication`
+  compiles a tool binary that speaks the harness plugin envelope and JSON-RPC,
+  serves its own catalog and manifests — and is as easy to declare as an argv
+  CLI. See <doc:StdinTools>.
 - **Transport abstraction**: ``MCPTransport`` (server role) and
   ``ClientTransport`` (client role) with IPv4, IPv6, dual-stack, and Unix
   domain socket support.
@@ -77,6 +81,19 @@ the wire: it serves tools and consumes them as a client.
 - ``StdioTransport``
 - ``TCPTransport``
 - ``ServerAddress``
+
+### One-Shot Tools
+
+- <doc:StdinTools>
+- ``MCPInterface``
+- ``MCPStdinHost``
+- ``MCPStdinDialect``
+- ``MCPPluginDialect``
+- ``MCPJSONRPCDialect``
+- ``MCPToolCatalog``
+- ``MCPToolManifestFormat``
+- ``MCPManifestContext``
+- ``ArcPluginManifest``
 
 ### Access Control
 

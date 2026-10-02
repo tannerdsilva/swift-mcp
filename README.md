@@ -37,6 +37,7 @@ try await server.runService()
 - **`@MCPCommand` macro** — generate an `MCPTool` conformance from a struct with a `run()` method
 - **`@FuncTool` macro** — generate MCP tools from plain functions
 - **`@MCPApplication` macro** — full server entry point generation with exhaustive, type-preserving dispatch
+- **One-shot stdin tools** — `interface: .oneShot` compiles a tool binary that speaks the harness plugin envelope and JSON-RPC, serves its own catalog and manifests ([guide](Sources/MCP/Documentation.docc/StdinTools.md))
 - **Property wrappers** — `@Argument`, `@Option`, `@Flag`, `@OptionGroup`
 - **Automatic JSON Schema** — tool parameters are described in JSON Schema Draft 7
 - **Compile-time discovery** — parameters are discovered via macro-generated code, no runtime reflection
@@ -234,6 +235,29 @@ struct MyApp {
     @Tool var weather = GetWeather()
     @Tool var greet = Greet()
 }
+```
+
+### One-shot stdin tools
+
+`interface: .oneShot` compiles a binary that a harness drives over stdin —
+the plugin envelope (`{"tool","args"}` → `{"result"}`), JSON-RPC, and its own
+introspection (`--mcp-list`, `--mcp-manifest arc`) — with no hand-written
+envelope, dispatch table, or manifest code. See the
+[One-Shot Stdin Tools](Sources/MCP/Documentation.docc/StdinTools.md) guide.
+
+```swift
+@main
+@MCPApplication(name: "my-tool", version: "1.0.0", interface: .oneShot)
+struct MyTool {
+    @Tool var greet = Greet()
+}
+```
+
+```bash
+$ echo '{"tool":"greet","args":{"name":"Ada"}}' | my-tool
+{"result":"Hello, Ada!"}
+
+$ my-tool --mcp-manifest arc        # the binary describes itself
 ```
 
 ## Documentation

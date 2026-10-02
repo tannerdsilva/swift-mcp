@@ -283,6 +283,25 @@ Specify either `address` or `transport`, never both:
 )
 ```
 
+### One-Shot Tools
+
+`interface: .oneShot` compiles the binary as a stdin tool instead of a
+session server: the generated `main()` runs an ``MCPStdinHost`` that answers
+the harness plugin envelope, JSON-RPC frames, and its own introspection —
+described in <doc:StdinTools>.
+
+```swift
+@main
+@MCPApplication(name: "my-tool", version: "1.0.0", interface: .oneShot)
+struct MyTool {
+    @Tool var greet = Greet()
+}
+```
+
+A one-shot binary cannot bind an `address` or take a custom `transport`;
+those combinations are rejected with a diagnostic. The optional `description`
+parameter names the binary for harness introspection.
+
 ## Macro Implementation Details
 
 Both macros are implemented using SwiftSyntax and run as compiler plugins. The

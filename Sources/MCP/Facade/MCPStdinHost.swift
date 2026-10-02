@@ -63,7 +63,7 @@ public enum MCPStdinHostError: Error, Sendable, Equatable, CustomStringConvertib
 /// A one-shot stdin tool host: the binary shape that makes a tool as easy to
 /// call as an argv CLI.
 ///
-/// The host drives the existing ``MCPMessageRouter`` + ``MCPTransport``
+/// The host drives the existing `MCPMessageRouter` + ``MCPTransport``
 /// pipeline through pluggable ``MCPStdinDialect``s, serves its own
 /// self-description (`--mcp-list`, `--mcp-manifest <name>`), and defines the
 /// process exit contract. It is a `Service`: run it via ``runService(gracefulShutdownSignals:)``

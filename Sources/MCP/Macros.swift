@@ -115,7 +115,7 @@ public macro MCPCommand(
 @attached(extension, conformances: StaticMCPGroup, names: named(mcpParameters), named(mcpApply))
 public macro MCPOptionGroup() = #externalMacro(module: "MCPMacros", type: "MCPOptionGroupMacro")
 
-/// The binary shape an ``MCPApplication`` compiles into.
+/// The binary shape an `@MCPApplication` compiles into.
 ///
 /// The shape is chosen at compile time: `interface: .session` (the default)
 /// generates a session server entry; `interface: .oneShot` generates a stdin

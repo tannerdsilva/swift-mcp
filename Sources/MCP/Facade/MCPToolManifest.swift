@@ -79,7 +79,7 @@ public struct MCPManifestContext: Sendable {
             // a relative path with a directory component: resolve against cwd.
             var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
             guard realpath(argv0, &buffer) != nil else { return nil }
-            return String(cString: buffer)
+            return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
         }
         let path = searchPath ?? StdioTransport.environmentString("PATH") ?? "/usr/bin:/bin"
         for directory in path.split(separator: ":") {

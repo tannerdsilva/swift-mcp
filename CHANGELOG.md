@@ -34,6 +34,20 @@ MCP-by-subprocess via SwiftSlash 5.0 bring-your-own data channels.
   routing + tool registries), `MCPMessageHandler`, `TransportMessageHandler`.
 - `MCPFixtureServer` — test-fixture `@MCPApplication` stdio server
   (echo/add/slow) spawned by the client test suite.
+- **One-shot stdin tool facade** — `interface: .oneShot` on `@MCPApplication`
+  (with `description:`; `address`/`transport` rejected by diagnostic):
+  - `MCPStdinHost` (`Service`) — drives the shared router + transport through
+    pluggable dialects, writes responses synchronously, maps the exit contract
+    in `runMain()`, and serves introspection before any transport starts.
+  - `MCPStdinDialect` (byte transcoders over the one router) with
+    `MCPPluginDialect` (`{"tool","args"}` ⇄ `{"result"}`, completes after the
+    first request — stdin-holding harnesses cannot hang) and
+    `MCPJSONRPCDialect` (byte identity; the router classifies).
+  - `MCPToolCatalog` / `MCPToolManifestFormat` / `MCPManifestContext` /
+    `ArcPluginManifest` — self-description from the compiled surface
+    (`--mcp-list`, `--mcp-manifest arc`), canonical sorted-key output.
+  - `MCPFixtureTool` — test-fixture one-shot binary spawned by the end-to-end
+    suite (plugin, JSON-RPC, introspection, exit contract, `MCP_ACCESS_LEVEL`).
 - Dependency: `tannerdsilva/SwiftSlash` 5.0.0 (dependency-free).
 
 ### Changed
