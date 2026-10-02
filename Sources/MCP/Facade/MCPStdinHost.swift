@@ -113,6 +113,12 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
         /// descriptor. Defaults to stdout; tests inject a pipe.
         public var outputFD: Int32
 
+        /// The argv a manifest should advertise for invoking a tool — the
+        /// harness appends it after the binary path (e.g. `["plugin"]` for a
+        /// binary whose one-shot entry is a subcommand). Defaults to empty
+        /// (a pure one-shot binary takes no arguments).
+        public var manifestInvocationArguments: [String]
+
         /// Creates a configuration.
         ///
         /// - Parameters:
@@ -122,16 +128,20 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
         ///   - arguments: Process arguments to inspect. Defaults to
         ///     `CommandLine.arguments`.
         ///   - outputFD: The result descriptor. Defaults to stdout.
+        ///   - manifestInvocationArguments: The argv prefix emitted into
+        ///     manifests. Defaults to empty.
         public init(
             dialects: [any MCPStdinDialect] = [MCPPluginDialect(), MCPJSONRPCDialect()],
             introspection: Bool = true,
             arguments: [String] = CommandLine.arguments,
-            outputFD: Int32 = STDOUT_FILENO
+            outputFD: Int32 = STDOUT_FILENO,
+            manifestInvocationArguments: [String] = []
         ) {
             self.dialects = dialects
             self.introspection = introspection
             self.arguments = arguments
             self.outputFD = outputFD
+            self.manifestInvocationArguments = manifestInvocationArguments
         }
     }
 
@@ -328,7 +338,10 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
                 description: description,
                 dispatcher: dispatcher
             )
-            let context = MCPManifestContext(binaryPath: binaryPath, invocationArguments: [])
+            let context = MCPManifestContext(
+                binaryPath: binaryPath,
+                invocationArguments: configuration.manifestInvocationArguments
+            )
             try Self.writeLine(try format.encode(catalog, context: context), to: configuration.outputFD)
         }
     }

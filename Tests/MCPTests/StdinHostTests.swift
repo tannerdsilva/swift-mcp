@@ -62,6 +62,7 @@ private func hostReadUntil(fd: Int32, timeout: TimeInterval, condition: (String)
 private func makeHostPair<Dispatcher: MCPToolDispatcher>(
     dispatcher: Dispatcher,
     arguments: [String] = ["test-tool"],
+    manifestInvocationArguments: [String] = [],
     dialects: [any MCPStdinDialect] = [MCPPluginDialect(), MCPJSONRPCDialect()]
 ) -> (host: MCPStdinHost<Dispatcher>, inputWrite: FileHandle, outputRead: FileHandle, outputWrite: FileHandle) {
     let input = Pipe()
@@ -69,6 +70,7 @@ private func makeHostPair<Dispatcher: MCPToolDispatcher>(
     let transport = StdioTransport(input: input.fileHandleForReading, output: output.fileHandleForWriting)
     var configuration = MCPStdinHost<Dispatcher>.Configuration(dialects: dialects, arguments: arguments)
     configuration.outputFD = output.fileHandleForWriting.fileDescriptor
+    configuration.manifestInvocationArguments = manifestInvocationArguments
     let host = MCPStdinHost(
         name: "test-tool",
         version: "1.0.0",
@@ -278,6 +280,23 @@ struct StdinHostIntrospectionTests {
         #expect(tools.compactMap { $0["name"] as? String } == ["greet", "calculate"])
         #expect(tools.first?["command"] as? String == "/usr/bin/true")
         #expect(tools.first?["toolset"] as? String == "test-tool")
+    }
+
+    @Test("--mcp-manifest emits the configured invocation argv prefix")
+    func manifestInvocationArguments() async throws {
+        let pair = makeHostPair(
+            dispatcher: AppServer(),
+            arguments: ["/usr/bin/true", "--mcp-manifest", "arc"],
+            manifestInvocationArguments: ["plugin"]
+        )
+
+        try await pair.host.run()
+
+        let text = hostReadUntil(fd: pair.outputRead.fileDescriptor, timeout: 2) { $0.hasSuffix("\n") }
+        let decoded = try #require(decodeFrame(Array(text.utf8)) as? [String: Any])
+        let tools = try #require(decoded["tools"] as? [[String: Any]])
+        #expect(tools.count == 2)
+        #expect(tools.allSatisfy { $0["args"] as? [String] == ["plugin"] })
     }
 
     @Test("unknown manifest formats and unresolved binary paths fail cleanly")
