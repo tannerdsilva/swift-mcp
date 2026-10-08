@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 — Unreleased
+## 2.0.0
 
 Transport unification and the client role: one NIO pipeline serves every
 deployment, and the package now both serves and consumes MCP — including
