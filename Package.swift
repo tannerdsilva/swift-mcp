@@ -106,6 +106,20 @@ let package = Package(
             ]
         ),
 
+        // --- Reference tool pack: the fleet model ---
+        //
+        // twelve tools in one `interface: .oneShot` binary, spanning every
+        // return shape the facade supports (Void, String, Int, Codable,
+        // throwing, debug-only, access-gated). the worked example the pack
+        // article points at. not part of the library.
+        .executableTarget(
+            name: "MCPToolPack",
+            dependencies: ["MCP"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+
         // --- Main MCP library ---
         .target(
             name: "MCP",
