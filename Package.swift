@@ -47,6 +47,13 @@ let package = Package(
             url: "https://github.com/tannerdsilva/SwiftSlash.git",
             from: "5.0.0"
         ),
+        // ArgumentParser — used only by the two-file pack fixture, which
+        // compile-checks the selective-import layout a pack with its own CLI
+        // needs. The library itself does not depend on it.
+        .package(
+            url: "https://github.com/apple/swift-argument-parser.git",
+            from: "1.5.0"
+        ),
     ],
     targets: [
         // --- Test fixture server ---
@@ -70,6 +77,24 @@ let package = Package(
         .executableTarget(
             name: "MCPFixtureTool",
             dependencies: ["MCP"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+
+        // --- Test fixture: two-file pack layout ---
+        //
+        // compile-checks the selective-import template a pack with its own CLI
+        // needs: MCP tools in one file, an ArgumentParser entry in another.
+        // `import MCP` in the entry file would collide with ArgumentParser's
+        // own `@Argument`/`@Option`/`@Flag`/`@OptionGroup`. not part of the
+        // library.
+        .executableTarget(
+            name: "MCPTwoFilePack",
+            dependencies: [
+                "MCP",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]

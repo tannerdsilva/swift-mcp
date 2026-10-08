@@ -238,6 +238,13 @@ public enum MCPInterface: Sendable {
 ///     @Tool var greet = Greet()
 /// }
 /// ```
+///
+/// `manifestInvocationArguments` is emitted into every harness manifest as the
+/// argv a caller appends after the binary path — set it when a pack's one-shot
+/// entry sits behind a subcommand (`["plugin"]`). It applies to
+/// `interface: .oneShot` only: a session server has no stdin entry to
+/// advertise, so the combination is rejected with a diagnostic rather than
+/// silently ignored.
 @attached(member, names: named(main), named(callTool), named(_invokeTool), named(toolID), named(requiredAccess), named(toolCatalog), arbitrary)
 @attached(extension, conformances: MCPToolDispatcher)
 public macro MCPApplication(
@@ -246,7 +253,8 @@ public macro MCPApplication(
     description: String = "",
     interface: MCPInterface = .session,
     address: ServerAddress? = nil,
-    transport: (any MCPTransport)? = nil
+    transport: (any MCPTransport)? = nil,
+    manifestInvocationArguments: [String] = []
 ) = #externalMacro(module: "MCPMacros", type: "MCPApplicationMacro")
 
 /// A macro that generates an ``MCPTool``-conforming struct from a static function.

@@ -62,6 +62,7 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
         let addressArg = extractExpressionArgument(from: node, name: "address")
         let transportArg = extractExpressionArgument(from: node, name: "transport")
         let maxMessageSizeArg = extractIntArgument(from: node, name: "maxMessageSize")
+        let manifestInvocationArgumentsArg = extractExpressionArgument(from: node, name: "manifestInvocationArguments")
 
         if addressArg != nil && transportArg != nil {
             throw MacroError.message(
@@ -78,6 +79,12 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
         if isOneShot, transportArg != nil {
             throw MacroError.message(
                 "@MCPApplication: 'interface: .oneShot' cannot take a custom 'transport' — the one-shot host owns its stdio carrier"
+            )
+        }
+
+        if !isOneShot, manifestInvocationArgumentsArg != nil {
+            throw MacroError.message(
+                "@MCPApplication: 'manifestInvocationArguments' applies to 'interface: .oneShot' only — a session server has no stdin entry to advertise"
             )
         }
 
@@ -122,7 +129,8 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
             isOneShot: isOneShot,
             addressArg: addressArg,
             transportArg: transportArg,
-            maxMessageSizeArg: maxMessageSizeArg
+            maxMessageSizeArg: maxMessageSizeArg,
+            manifestInvocationArgumentsArg: manifestInvocationArgumentsArg
         )
 
         return [
@@ -416,6 +424,11 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
     /// ``MCPStdinHost/runMain()`` maps failures onto the exit contract
     /// (generated code cannot add the C imports that exit-mapping needs, so
     /// the mapping lives in the framework).
+    ///
+    /// `manifestInvocationArgumentsArg`, when present, is emitted as the host's
+    /// `configuration:` — the argv a harness appends after the binary path to
+    /// reach this binary's one-shot entry. Absent, the emitted line is
+    /// unchanged from before the argument existed.
     static func generateMain(
         structName: String,
         serverName: String,
@@ -424,14 +437,18 @@ public struct MCPApplicationMacro: MemberMacro, ExtensionMacro {
         isOneShot: Bool,
         addressArg: String?,
         transportArg: String?,
-        maxMessageSizeArg: Int?
+        maxMessageSizeArg: Int?,
+        manifestInvocationArgumentsArg: String?
     ) -> String {
         if isOneShot {
+            let configurationArgument = manifestInvocationArgumentsArg.map {
+                ", configuration: .init(manifestInvocationArguments: \($0))"
+            } ?? ""
             return """
             /// Generated entry point for the MCP one-shot stdin tool.
             static func main() async {
                 let app = \(structName)()
-                await MCPStdinHost(name: "\(serverName)", version: "\(serverVersion)", description: "\(escapeStringLiteral(serverDescription))", dispatcher: app).runMain()
+                await MCPStdinHost(name: "\(serverName)", version: "\(serverVersion)", description: "\(escapeStringLiteral(serverDescription))", dispatcher: app\(configurationArgument)).runMain()
             }
             """
         }

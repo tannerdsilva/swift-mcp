@@ -22,25 +22,31 @@ import Glibc
 
 // MARK: - Fixture location
 
-/// Locates the built `MCPFixtureTool` binary.
+/// Locates a built executable target's binary.
 ///
 /// `swift build` must have run first (the test target does not build the
-/// executable itself). Resolved relative to this file, so the suite works from
+/// executables itself). Resolved relative to this file, so the suite works from
 /// any checkout.
-private func fixtureToolPath() throws -> String {
+private func builtToolPath(_ name: String) throws -> String {
     let source = URL(fileURLWithPath: #filePath)
     let repoRoot = source
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
     let candidates = [
-        repoRoot.appendingPathComponent(".build/debug/MCPFixtureTool"),
-        repoRoot.appendingPathComponent(".build/arm64-apple-macosx/debug/MCPFixtureTool"),
+        repoRoot.appendingPathComponent(".build/debug/\(name)"),
+        repoRoot.appendingPathComponent(".build/arm64-apple-macosx/debug/\(name)"),
     ]
     for path in candidates where FileManager.default.fileExists(atPath: path.path) {
         return path.path
     }
-    throw SpawnError.spawnFailed("MCPFixtureTool binary not found; run `swift build` first")
+    throw SpawnError.spawnFailed("\(name) binary not found; run `swift build` first")
+}
+
+/// Locates the built `MCPFixtureTool` binary — the plain `interface: .oneShot`
+/// pack with no CLI in front of it.
+private func fixtureToolPath() throws -> String {
+    try builtToolPath("MCPFixtureTool")
 }
 
 // MARK: - Raw process spawning (the facade's own contract, not the transport's)
@@ -426,5 +432,61 @@ struct StdinToolE2ETests {
         let stderr = drain(fd: tool.stderrRead, quiet: 0.1)
         #expect(!stderr.contains("regular file"))
         #expect(stderr.contains("no request received"))
+    }
+
+    // MARK: - the two-file pack (a pack whose one-shot entry sits behind a subcommand)
+
+    @Test("the two-file pack serves its CLI-routed entry: `<bin> plugin`")
+    func twoFilePackServesSubcommandRoutedEntry() async throws {
+        // the pack's one-shot entry is behind a subcommand, so the harness
+        // spawns the argv the manifest advertises — `plugin` — rather than the
+        // bare binary.
+        let tool = try SpawnedTool.spawn(path: try builtToolPath("MCPTwoFilePack"), arguments: ["plugin"])
+        try tool.writeFrame(Array(#"{"tool":"greet","args":{"name":"tanner"}}"#.utf8) + [0x0A])
+        close(tool.stdinWrite)
+
+        let exit = try await tool.waitForExit()
+        #expect(exit == .code(0))
+
+        let stdout = drain(fd: tool.stdoutRead)
+        #expect(stdout.trimmingCharacters(in: .whitespacesAndNewlines) == #"{"result":"hello, tanner"}"#)
+    }
+
+    @Test("the two-file pack's manifest advertises the subcommand argv, not an empty one")
+    func twoFilePackManifestAdvertisesSubcommandArgv() async throws {
+        let binary = try builtToolPath("MCPTwoFilePack")
+        let tool = try SpawnedTool.spawn(
+            path: binary,
+            arguments: ["plugin", "--mcp-manifest", "arc"]
+        )
+        let exit = try await tool.waitForExit()
+        #expect(exit == .code(0))
+
+        let text = drain(fd: tool.stdoutRead)
+        let manifest = try #require((try? QuickJSON.decode(AnyCodable.self, from: Array(text.utf8)))?.value as? [String: Any])
+        let tools = try #require(manifest["tools"] as? [[String: Any]])
+        #expect(tools.compactMap { $0["name"] as? String } == ["greet", "reverse"])
+
+        // the point of `manifestInvocationArguments`: without it the emitted
+        // argv is `[]`, and a harness has no way to spawn this entry.
+        #expect(tools.allSatisfy { ($0["args"] as? [String]) == ["plugin"] })
+        // and `command` is the real executable, resolved from argv[0].
+        #expect(tools.allSatisfy { $0["command"] as? String == binary })
+        #expect(tools.allSatisfy { $0["toolset"] as? String == "mcp-two-file-pack" })
+    }
+
+    @Test("the two-file pack answers --mcp-list through its CLI without touching stdin")
+    func twoFilePackIntrospectionWithoutStdin() async throws {
+        let tool = try SpawnedTool.spawn(
+            path: try builtToolPath("MCPTwoFilePack"),
+            arguments: ["plugin", "--mcp-list"]
+        )
+        let exit = try await tool.waitForExit()
+        #expect(exit == .code(0))
+
+        let text = drain(fd: tool.stdoutRead)
+        let catalog = try #require((try? QuickJSON.decode(AnyCodable.self, from: Array(text.utf8)))?.value as? [String: Any])
+        #expect(catalog["name"] as? String == "mcp-two-file-pack")
+        #expect((catalog["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String } == ["greet", "reverse"])
     }
 }

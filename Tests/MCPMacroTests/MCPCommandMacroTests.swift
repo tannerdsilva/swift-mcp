@@ -1649,3 +1649,69 @@ func mcpApplicationOneShotRejectsNetworkShapes() {
         macros: ["MCPApplication": MCPApplicationMacro.self]
     )
 }
+
+@Test("MCPApplication interface: .oneShot emits manifestInvocationArguments into the host configuration")
+func mcpApplicationOneShotManifestInvocationArguments() {
+    let source = """
+    @MCPApplication(name: "test", version: "1.0.0", description: "pack fixture", interface: .oneShot, manifestInvocationArguments: ["plugin"])
+    struct MyApp {
+        @Tool var greet = Greet()
+    }
+    """
+    let file = Parser.parse(source: source)
+    let context = BasicMacroExpansionContext()
+    let expanded = file.expand(
+        macros: ["MCPApplication": MCPApplicationMacro.self],
+        contextGenerator: { _ in context }
+    )
+    let text = "\(expanded)"
+
+    // the argv a harness must append after the binary path is baked into the
+    // compiled entry, not left to a runtime flag.
+    #expect(text.contains("configuration: .init(manifestInvocationArguments: [\"plugin\"])"))
+    #expect(text.contains("runMain()"))
+
+    for diagnostic in context.diagnostics {
+        Issue.record("macro emitted diagnostic: \(diagnostic.message)")
+    }
+    #expect(!Parser.parse(source: text).hasError)
+}
+
+@Test("omitting manifestInvocationArguments leaves the one-shot entry unchanged")
+func mcpApplicationOneShotOmitsConfigurationWhenAbsent() {
+    let source = """
+    @MCPApplication(name: "test", version: "1.0.0", description: "one-shot fixture", interface: .oneShot)
+    struct MyApp {
+        @Tool var greet = Greet()
+    }
+    """
+    let file = Parser.parse(source: source)
+    let context = BasicMacroExpansionContext()
+    let expanded = file.expand(
+        macros: ["MCPApplication": MCPApplicationMacro.self],
+        contextGenerator: { _ in context }
+    )
+    let text = "\(expanded)"
+
+    // the d-e gate: absent the attribute, nothing is added to the generated
+    // init — the closing paren runs straight into `runMain()`.
+    #expect(text.contains("dispatcher: app).runMain()"))
+    #expect(!text.contains("configuration:"))
+
+    for diagnostic in context.diagnostics {
+        Issue.record("macro emitted diagnostic: \(diagnostic.message)")
+    }
+}
+
+@Test("manifestInvocationArguments without .oneShot is a diagnostic, not a silent no-op")
+func mcpApplicationManifestArgumentsRequireOneShot() {
+    assertMCPExpansionFails(
+        """
+        @MCPApplication(name: "test", version: "1.0.0", manifestInvocationArguments: ["plugin"])
+        struct MyApp {
+            @Tool var greet = Greet()
+        }
+        """,
+        macros: ["MCPApplication": MCPApplicationMacro.self]
+    )
+}
