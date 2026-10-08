@@ -183,7 +183,7 @@ struct ToolManifestTests {
         #expect(AnyCodable(schema) == AnyCodable(catalogSchema.value))
     }
 
-    @Test("arc manifest is deterministic and pretty, with sorted keys")
+    @Test("arc manifest is deterministic and compact, with sorted keys")
     func arcManifestDeterminism() throws {
         let manifest = ArcPluginManifest(toolset: "fixture-toolset")
         let catalog = catalogFixture()
@@ -192,8 +192,10 @@ struct ToolManifestTests {
         #expect(first == second)
 
         let text = String(decoding: first, as: UTF8.self)
-        // pretty, two-space indented.
-        #expect(text.contains("\n  \"description\""))
+        // compact: a harness reads these bytes, so there is no insignificant
+        // whitespace — one line, no padded separators.
+        #expect(!text.contains("\n"))
+        #expect(!text.contains("\" : \""))
         // sorted keys: description < name < tools < version.
         let descriptionIndex = try #require(text.range(of: "\"description\""))
         let nameIndex = try #require(text.range(of: "\"name\""))
@@ -202,6 +204,16 @@ struct ToolManifestTests {
         #expect(descriptionIndex.lowerBound < nameIndex.lowerBound)
         #expect(nameIndex.lowerBound < toolsIndex.lowerBound)
         #expect(toolsIndex.lowerBound < versionIndex.lowerBound)
+
+        // the reviewable form is a separate format name, differing in
+        // whitespace only.
+        let pretty = try ArcPluginManifest.Pretty(toolset: "fixture-toolset")
+            .encode(catalog, context: contextFixture())
+        let prettyText = String(decoding: pretty, as: UTF8.self)
+        #expect(prettyText.contains("\n  \"description\""))
+        let compactDoc = try QuickJSON.decode(AnyCodable.self, from: first)
+        let prettyDoc = try QuickJSON.decode(AnyCodable.self, from: pretty)
+        #expect(compactDoc == prettyDoc)
     }
 
     @Test("missing tool descriptions encode as empty strings; an absent top-level description is omitted")

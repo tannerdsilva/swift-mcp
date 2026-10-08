@@ -89,6 +89,9 @@ $ my-tool --mcp-list
 {"description":"…","name":"my-tool","tools":[{"description":"…","inputSchema":{…},"name":"greet"}],"version":"1.0.0"}
 
 $ my-tool --mcp-manifest arc
+{"description":"…","name":"my-tool","tools":[{"args":[],"command":"/usr/local/bin/my-tool","description":"…","name":"greet","schema":{…},"toolset":"my-tool"}],"version":"1.0.0"}
+
+$ my-tool --mcp-manifest arc-pretty
 {
   "description" : "…",
   "name" : "my-tool",
@@ -100,8 +103,14 @@ $ my-tool --mcp-manifest arc
 `--mcp-list` emits the ``MCPToolCatalog``; `--mcp-manifest <name>` renders it
 through a ``MCPToolManifestFormat`` — the arc format (``ArcPluginManifest``)
 ships first, and a consumer with its own harness adds a conformance instead of
-patching the framework. Manifests are deterministic: pretty, sorted-key
-output, so regenerating one yields the same bytes and diffs stay meaningful.
+patching the framework.
+
+Manifests are deterministic and **compact**: sorted keys at every depth and no
+insignificant whitespace, because a harness reads these bytes on every load, so
+their size is a token cost. The two-space pretty form a human reviews is the
+same format under its own name, ``ArcPluginManifest/Pretty``
+(`--mcp-manifest arc-pretty`); the name **is** the opt-in, and the two spellings
+decode to the same document.
 
 Both flags bypass the transport entirely, so they work even when the standard
 streams are redirected to files.

@@ -102,9 +102,14 @@ public struct MCPManifestContext: Sendable {
 ///   the **bare parameters object** (`type`/`properties`/`required`), not the
 ///   wrapped `{"type":"function",…}` envelope some harnesses accept.
 ///
-/// Output is canonical: pretty-printed, two-space indented, object keys
-/// sorted at every depth — so regenerating the same manifest yields the same
-/// bytes and diffs stay meaningful.
+/// Output is canonical **compact**: object keys sorted at every depth and no
+/// insignificant whitespace. A harness reads these bytes, so the manifest's
+/// size is a token cost on every load; regenerating still yields identical
+/// bytes, so diffs stay meaningful.
+///
+/// The two-space pretty form — the shape a human reviews — stays reachable as
+/// its own format name, ``Pretty`` (`--mcp-manifest arc-pretty`), so the
+/// compact default costs the CLI no extra flag.
 public struct ArcPluginManifest: MCPToolManifestFormat {
     public static let formatName = "arc"
 
@@ -112,9 +117,21 @@ public struct ArcPluginManifest: MCPToolManifestFormat {
     /// a one-shot binary serves exactly one toolset).
     public let toolset: String
 
-    /// Creates the arc manifest format for a toolset.
+    /// Whether to emit the two-space pretty form.
+    ///
+    /// Not public: the opt-in is the ``Pretty`` format name, not a parameter
+    /// here, so there is exactly one way to ask for pretty bytes.
+    private let pretty: Bool
+
+    /// Creates the arc manifest format for a toolset — compact canonical.
     public init(toolset: String) {
         self.toolset = toolset
+        self.pretty = false
+    }
+
+    init(toolset: String, pretty: Bool) {
+        self.toolset = toolset
+        self.pretty = pretty
     }
 
     public func encode(_ catalog: MCPToolCatalog, context: MCPManifestContext) throws -> [UInt8] {
@@ -138,6 +155,33 @@ public struct ArcPluginManifest: MCPToolManifestFormat {
         ))
         topLevel.append(("version", .scalar(AnyCodable(catalog.version))))
 
-        return try QuickJSON.encode(CanonicalJSON.object(topLevel), flags: [.prettyTwoSpaces])
+        return try QuickJSON.encode(
+            CanonicalJSON.object(topLevel),
+            flags: pretty ? [.prettyTwoSpaces] : []
+        )
+    }
+}
+
+extension ArcPluginManifest {
+    /// The arc manifest, pretty-printed for human review — the opt-in
+    /// `--mcp-manifest arc-pretty`.
+    ///
+    /// A separate conformance rather than a host flag because formats are data
+    /// (``MCPToolManifestFormat``): the name IS the opt-in, and a consumer that
+    /// only ever wants compact bytes never has to know this exists.
+    public struct Pretty: MCPToolManifestFormat {
+        public static let formatName = "arc-pretty"
+
+        /// The toolset every tool in this manifest belongs to.
+        public let toolset: String
+
+        /// Creates the pretty arc manifest format for a toolset.
+        public init(toolset: String) {
+            self.toolset = toolset
+        }
+
+        public func encode(_ catalog: MCPToolCatalog, context: MCPManifestContext) throws -> [UInt8] {
+            try ArcPluginManifest(toolset: toolset, pretty: true).encode(catalog, context: context)
+        }
     }
 }

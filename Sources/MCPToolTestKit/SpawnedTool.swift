@@ -332,7 +332,8 @@ public final class SpawnedTool {
 // MARK: - Pipe reads
 
 /// Reads everything the descriptor has until a quiet period passes (or EOF),
-/// so a multi-line pretty manifest is drained without an EOF dependency.
+/// so multi-line output (a pretty manifest, several stderr lines) is drained
+/// without an EOF dependency.
 public func drain(fd: Int32, quiet: TimeInterval = 0.3, deadline: TimeInterval = 5) -> String {
     var text = ""
     let limit = Date().addingTimeInterval(deadline)

@@ -206,8 +206,9 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
     ///   - transport: The inbound carrier — framing, size cap, EOF, and caller
     ///     identity. Defaults to ``StdioTransport``.
     ///   - manifestFormats: The manifest formats `--mcp-manifest <name>`
-    ///     serves. `nil` (the default) serves exactly the arc plugin manifest,
-    ///     with the toolset set to `name`.
+    ///     serves. `nil` (the default) serves the arc plugin manifest in both
+    ///     its compact (``ArcPluginManifest``) and pretty (``ArcPluginManifest/Pretty``)
+    ///     spellings, with the toolset set to `name`.
     ///   - configuration: Dialect order, introspection, arguments, and output
     ///     descriptor.
     public init(
@@ -224,7 +225,10 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
         self.description = description
         self.dispatcher = dispatcher
         self.transport = transport
-        self.manifestFormats = manifestFormats ?? [ArcPluginManifest(toolset: name)]
+        self.manifestFormats = manifestFormats ?? [
+            ArcPluginManifest(toolset: name),
+            ArcPluginManifest.Pretty(toolset: name),
+        ]
         self.configuration = configuration
         var logger = Logger(label: "mcp.stdin.host")
         logger.logLevel = .critical
