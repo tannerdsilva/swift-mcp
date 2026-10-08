@@ -47,6 +47,13 @@ public enum MCPStdinHostError: Error, Sendable, Equatable, CustomStringConvertib
     /// `Operation unsupported` at transport start — so the host checks both
     /// descriptors up front and names the offending stream.
     case standardStreamIsNotAPipe(stream: String, descriptor: Int32)
+    /// No frame arrived within the configured first-frame deadline.
+    ///
+    /// The transport delivers complete frames only, so a producer that omits
+    /// the terminating newline never delivers one — and never closes the
+    /// stream either, so EOF is not observed. Without a deadline that is a
+    /// silent hang with no output on either stream.
+    case noFrameWithinDeadline
 
     public var description: String {
         switch self {
@@ -64,6 +71,8 @@ public enum MCPStdinHostError: Error, Sendable, Equatable, CustomStringConvertib
             "output write failed: \(detail)"
         case .standardStreamIsNotAPipe(let stream, let descriptor):
             "\(stream) (fd \(descriptor)) is a regular file, not a pipe: a one-shot tool exchanges frames over pipes, so a shell redirect (`< file` / `> file`) cannot drive it"
+        case .noFrameWithinDeadline:
+            "no frame arrived before the first-frame deadline: the transport delivers complete frames only, so every frame must end with a newline"
         }
     }
 }
@@ -127,6 +136,19 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
         /// (a pure one-shot binary takes no arguments).
         public var manifestInvocationArguments: [String]
 
+        /// An optional deadline for the **first** inbound frame.
+        ///
+        /// The transport hands over complete frames only: a producer that
+        /// never terminates a frame with a newline never delivers one, and an
+        /// open stream is never observed as EOF, so the process hangs with
+        /// nothing on either stream. When set, the host gives up after this
+        /// interval, records ``MCPStdinHostError/noFrameWithinDeadline``, and
+        /// exits `1` with that diagnostic.
+        ///
+        /// `nil` (the default) waits indefinitely — a session-shaped peer may
+        /// legitimately idle, and today's behavior must not change.
+        public var firstFrameTimeout: Duration?
+
         /// Creates a configuration.
         ///
         /// - Parameters:
@@ -138,18 +160,22 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
         ///   - outputFD: The result descriptor. Defaults to stdout.
         ///   - manifestInvocationArguments: The argv prefix emitted into
         ///     manifests. Defaults to empty.
+        ///   - firstFrameTimeout: Deadline for the first inbound frame.
+        ///     Defaults to `nil` (wait indefinitely).
         public init(
             dialects: [any MCPStdinDialect] = [MCPPluginDialect(), MCPJSONRPCDialect()],
             introspection: Bool = true,
             arguments: [String] = CommandLine.arguments,
             outputFD: Int32 = STDOUT_FILENO,
-            manifestInvocationArguments: [String] = []
+            manifestInvocationArguments: [String] = [],
+            firstFrameTimeout: Duration? = nil
         ) {
             self.dialects = dialects
             self.introspection = introspection
             self.arguments = arguments
             self.outputFD = outputFD
             self.manifestInvocationArguments = manifestInvocationArguments
+            self.firstFrameTimeout = firstFrameTimeout
         }
     }
 
@@ -216,6 +242,9 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
         try Self.rejectRegularFileStreams(configuration: configuration, transport: transport)
 
         state.reset()
+        let deadline = Self.armFirstFrameDeadline(configuration.firstFrameTimeout, on: self)
+        defer { deadline?.cancel() }
+
         try await withGracefulShutdownHandler {
             try await self.transport.start { [self] frame, caller in
                 await self.handleFrame(frame, caller: caller)
@@ -268,6 +297,36 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
         return info.st_mode & S_IFMT == S_IFREG
     }
 
+    // MARK: - First-frame deadline
+
+    /// Arms the opt-in first-frame deadline.
+    ///
+    /// One unstructured `Task`, deliberately: a task group cannot express
+    /// "abandon this if it never finishes", and group children are not
+    /// guaranteed to be scheduled under strict concurrency — a watchdog that
+    /// might not run is not a watchdog. The once token
+    /// (``HostState/claimFirstFrame()``) makes it exactly-once against the
+    /// frame handler, so the deadline can never fire on a frame that arrived.
+    ///
+    /// - Returns: The watchdog to cancel once `run()` is done, or `nil` when
+    ///   no deadline is configured — the default, and today's behavior.
+    private static func armFirstFrameDeadline(
+        _ timeout: Duration?,
+        on host: MCPStdinHost
+    ) -> Task<Void, Never>? {
+        guard let timeout else { return nil }
+        return Task {
+            do {
+                try await Task.sleep(for: timeout)
+            } catch {
+                return  // cancelled: a frame arrived, or `run()` finished
+            }
+            if host.state.claimFirstFrame() {
+                await host.fail(with: .noFrameWithinDeadline)
+            }
+        }
+    }
+
     /// Runs the host inside a `ServiceGroup` with signal-based graceful
     /// shutdown — the session server's exact lifecycle, for the one-shot
     /// shape. One-shot mode is not an exemption from the Second Law.
@@ -315,6 +374,9 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
     /// throws (failures are recorded and the transport is stopped — `run()`
     /// rethrows once it returns).
     private func handleFrame(_ frame: [UInt8], caller: MCPCallerInfo) async -> [UInt8]? {
+        // a delivered frame disarms the deadline: claim the once token first,
+        // so the watchdog can never fire on work that was merely in progress.
+        _ = state.claimFirstFrame()
         if state.isComplete() { return nil }
 
         let dialect: any MCPStdinDialect
@@ -432,6 +494,7 @@ private final class HostState: @unchecked Sendable {
         var failure: MCPStdinHostError?
         var handledFrames = 0
         var isComplete = false
+        var firstFrameClaimed = false
     }
 
     private let mutex = Mutex<State>(State())
@@ -456,6 +519,21 @@ private final class HostState: @unchecked Sendable {
 
     func failure() -> MCPStdinHostError? {
         mutex.withLock { $0.failure }
+    }
+
+    /// Claims the first-frame token; `true` for exactly one caller.
+    ///
+    /// The deadline watchdog and the frame handler race for it, and whoever
+    /// wins decides the outcome: a delivered frame disarms the watchdog; a
+    /// watchdog that fires first ends the run. Claiming is *not* the same as
+    /// bytes arriving — the transport delivers complete frames only, so an
+    /// unterminated frame never reaches here and the deadline still fires.
+    func claimFirstFrame() -> Bool {
+        mutex.withLock { state in
+            if state.firstFrameClaimed { return false }
+            state.firstFrameClaimed = true
+            return true
+        }
     }
 
     func markHandled() {
