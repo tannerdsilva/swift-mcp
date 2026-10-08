@@ -37,6 +37,28 @@ private func call(_ tool: String, _ args: [String: String] = [:]) async throws -
     return (exit, try handle.readResult())
 }
 
+/// The stderr a one-shot tool authors itself, with the known dependency noise
+/// filtered out.
+///
+/// QuickJSON prints a construction banner from `makeDefaultLogger` — a
+/// `newLogger.debug(...)` at a level hardcoded to `.debug`, emitted the moment
+/// the default logger is *created*. So it fires before any framework code runs,
+/// and the framework cannot suppress it: assigning `.critical` reads the
+/// property, which is what creates the logger in the first place. Measured at
+/// 346 bytes on every invocation, and one line ahead of the single diagnostic
+/// line on every failure.
+///
+/// Filtered rather than tolerated so these tests still assert the framework's
+/// OWN discipline strictly: nothing on success, exactly one line on failure.
+/// The dependency-side fix (defaulting `makeDefaultLogger` to `.critical`, or
+/// dropping the banner) would make the filter a no-op.
+private func frameworkStderr(_ tool: SpawnedTool) -> [String] {
+    tool.drainStderr()
+        .split(separator: "\n", omittingEmptySubsequences: true)
+        .map(String.init)
+        .filter { !$0.contains("com.tannersilva.quickjson.") }
+}
+
 /// The reference pack, driven the way a harness drives it.
 ///
 /// Twelve tools in one process is the fleet model under test: the assertions
@@ -213,5 +235,35 @@ struct ToolPackTests {
         let diagnostic = tool.drainStderr()
         #expect(diagnostic.contains("stdout"))
         #expect(diagnostic.contains("fd 1"))
+    }
+
+    @Test("a successful invocation authors nothing at all on stderr")
+    func successfulInvocationAuthorsNoStderr() async throws {
+        // the exit contract promises stdout carries the response and a SUCCESS
+        // writes no diagnostic. the QuickJSON banner is a dependency's, not the
+        // framework's, so it is filtered — see `frameworkStderr`.
+        let tool = try SpawnedTool.spawn(path: try packPath())
+        try tool.writePluginFrame(tool: "echo", args: ["message": "hi"])
+        tool.closeStdin()
+
+        #expect(try await tool.waitForExit() == .code(0))
+        #expect(try tool.readResult() == "hi")
+        #expect(frameworkStderr(tool).isEmpty)
+    }
+
+    @Test("a failure authors exactly one stderr line, and nothing else")
+    func failurePathAuthorsExactlyOneLine() async throws {
+        // the other half of the same contract: a failure is ONE line a harness
+        // can forward verbatim, not one line behind a banner.
+        let tool = try SpawnedTool.spawnWithFileStreams(
+            path: try packPath(),
+            stdoutFile: FileManager.default.temporaryDirectory
+                .appendingPathComponent("mcp-tool-pack-oneline-probe.txt").path
+        )
+        #expect(try await tool.waitForExit() == .code(1))
+
+        let lines = frameworkStderr(tool)
+        #expect(lines.count == 1)
+        #expect(lines.first?.contains("stdout") == true)
     }
 }
