@@ -12,6 +12,12 @@ let package = Package(
         .library(
             name: "MCP",
             targets: ["MCP"]
+        ),
+        // Test kit for packages that author their own tool packs: spawn a
+        // built one-shot binary, drive its stdin, read its exit.
+        .library(
+            name: "MCPToolTestKit",
+            targets: ["MCPToolTestKit"]
         )
     ],
     dependencies: [
@@ -119,6 +125,21 @@ let package = Package(
             ]
         ),
 
+        // --- Test kit for pack authors ---
+        //
+        // spawns a built one-shot tool binary and drives it the way a harness
+        // does: real process, real pipes, real exit codes. Foundation is fine
+        // here — this target is not on the library's wire path.
+        .target(
+            name: "MCPToolTestKit",
+            dependencies: [
+                .product(name: "QuickJSON", package: "QuickJSON"),
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+
         // --- Macro implementation ---
         .macro(
             name: "MCPMacros",
@@ -140,6 +161,7 @@ let package = Package(
             dependencies: [
                 "MCP",
                 "MCPMacros",
+                "MCPToolTestKit",
                 .product(name: "QuickJSON", package: "QuickJSON"),
                 .product(name: "SwiftSlash", package: "SwiftSlash"),
                 .product(name: "NIO", package: "swift-nio"),
