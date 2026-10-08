@@ -41,6 +41,12 @@ public enum MCPStdinHostError: Error, Sendable, Equatable, CustomStringConvertib
     case executablePathUnresolved
     /// Writing a response to the output descriptor failed.
     case writeFailed(String)
+    /// A standard stream is a regular file, which can never carry a frame.
+    ///
+    /// NIO's pipe bootstrap only reports this opaquely — as
+    /// `Operation unsupported` at transport start — so the host checks both
+    /// descriptors up front and names the offending stream.
+    case standardStreamIsNotAPipe(stream: String, descriptor: Int32)
 
     public var description: String {
         switch self {
@@ -56,6 +62,8 @@ public enum MCPStdinHostError: Error, Sendable, Equatable, CustomStringConvertib
             "cannot resolve this binary's executable path for the manifest"
         case .writeFailed(let detail):
             "output write failed: \(detail)"
+        case .standardStreamIsNotAPipe(let stream, let descriptor):
+            "\(stream) (fd \(descriptor)) is a regular file, not a pipe: a one-shot tool exchanges frames over pipes, so a shell redirect (`< file` / `> file`) cannot drive it"
         }
     }
 }
@@ -205,6 +213,8 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
             return
         }
 
+        try Self.rejectRegularFileStreams(configuration: configuration, transport: transport)
+
         state.reset()
         try await withGracefulShutdownHandler {
             try await self.transport.start { [self] frame, caller in
@@ -218,6 +228,44 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
 
         if let failure = state.failure() { throw failure }
         if state.handledCount() == 0 { throw MCPStdinHostError.noInputReceived }
+    }
+
+    // MARK: - Stream preflight
+
+    /// Rejects a regular file on either std stream before the transport starts.
+    ///
+    /// NIO's pipe bootstrap cannot bind a regular file, and says so only as an
+    /// opaque `ChannelError.operationUnsupported` at transport start — by which
+    /// point a harness has already launched the tool and is waiting on it.
+    /// Checking here turns that into one stderr line that names the stream and
+    /// the cause.
+    ///
+    /// The inbound descriptor comes from the transport (the host never assumes
+    /// the process's own stdin), and introspection deliberately runs *before*
+    /// this, so `my-tool --mcp-manifest arc > manifest.json` keeps working.
+    ///
+    /// - Throws: ``MCPStdinHostError/standardStreamIsNotAPipe(stream:descriptor:)``.
+    private static func rejectRegularFileStreams(
+        configuration: Configuration,
+        transport: any MCPTransport
+    ) throws {
+        if let inbound = transport.inboundFileDescriptor, Self.isRegularFile(inbound) {
+            throw MCPStdinHostError.standardStreamIsNotAPipe(stream: "stdin", descriptor: inbound)
+        }
+        if Self.isRegularFile(configuration.outputFD) {
+            throw MCPStdinHostError.standardStreamIsNotAPipe(stream: "stdout", descriptor: configuration.outputFD)
+        }
+    }
+
+    /// Whether `descriptor` refers to a regular file (`S_IFREG`).
+    ///
+    /// An `fstat` failure reads as "not a regular file": the descriptor is then
+    /// the transport's to report, and a preflight must never turn an unrelated
+    /// failure into a misleading diagnosis.
+    private static func isRegularFile(_ descriptor: Int32) -> Bool {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0 else { return false }
+        return info.st_mode & S_IFMT == S_IFREG
     }
 
     /// Runs the host inside a `ServiceGroup` with signal-based graceful

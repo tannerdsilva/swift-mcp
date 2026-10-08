@@ -47,6 +47,21 @@ public protocol MCPTransport: Sendable {
     /// This method should cause `start(handler:)` to return. After calling
     /// `stop()`, the transport should no longer invoke the handler.
     func stop() async throws
+
+    /// The descriptor inbound frames arrive on, when the transport is
+    /// descriptor-backed.
+    ///
+    /// A host that must reject a stream *before* the transport starts — a
+    /// one-shot tool cannot be driven from a regular file — asks the transport
+    /// which descriptor to check, rather than assuming the process's stdin.
+    /// Transports that are not descriptor-backed (sockets, the in-process
+    /// router) return `nil` and are never preflighted.
+    var inboundFileDescriptor: Int32? { get }
+}
+
+extension MCPTransport {
+    /// Not descriptor-backed by default.
+    public var inboundFileDescriptor: Int32? { nil }
 }
 
 // MARK: - Stdio Transport
@@ -137,6 +152,10 @@ public final class StdioTransport: MCPTransport, @unchecked Sendable {
         self.oversizeErrorFrame =
             (try? QuickJSON.encode(JSONRPCErrorResponse(id: .null, code: -32700, message: "Message too large"))) ?? []
     }
+
+    /// The descriptor NIO's pipe channel will read frames from — the injected
+    /// test handle, or the process's own stdin.
+    public var inboundFileDescriptor: Int32? { inputHandle.fileDescriptor }
 
     /// Starts the transport and begins reading from stdin.
     ///

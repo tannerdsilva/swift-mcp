@@ -131,6 +131,72 @@ private final class SpawnedTool {
         return SpawnedTool(pid: pid, stdinWrite: stdinPipe[1], stdoutRead: stdoutPipe[0], stderrRead: stderrPipe[0])
     }
 
+    /// Spawns the fixture with one or both std streams bound to a **regular
+    /// file** — the shell-redirection shape (`< in` / `> out`) the host's
+    /// preflight must reject before the transport starts.
+    ///
+    /// The file is opened by `posix_spawn` itself (`addopen`), so the child
+    /// sees a real regular file on that descriptor; the stream that is *not*
+    /// redirected keeps its pipe. A stream that is not redirected reports
+    /// `-1` for its parent-facing end.
+    static func spawnWithFileStreams(
+        path: String,
+        arguments: [String] = [],
+        stdinFile: String? = nil,
+        stdoutFile: String? = nil
+    ) throws -> SpawnedTool {
+        var stdinPipe: [Int32] = [-1, -1]
+        var stdoutPipe: [Int32] = [-1, -1]
+        var stderrPipe: [Int32] = [-1, -1]
+        if stdinFile == nil, pipe(&stdinPipe) != 0 {
+            throw SpawnError.spawnFailed("pipe() failed: \(String(cString: strerror(errno)))")
+        }
+        if stdoutFile == nil, pipe(&stdoutPipe) != 0 {
+            throw SpawnError.spawnFailed("pipe() failed: \(String(cString: strerror(errno)))")
+        }
+        guard pipe(&stderrPipe) == 0 else {
+            throw SpawnError.spawnFailed("pipe() failed: \(String(cString: strerror(errno)))")
+        }
+        for fd in [stdinPipe[0], stdinPipe[1], stdoutPipe[0], stdoutPipe[1], stderrPipe[0], stderrPipe[1]] where fd >= 0 {
+            _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
+        }
+
+        var fileActions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fileActions)
+        if let stdinFile {
+            posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, stdinFile, O_RDONLY, 0)
+        } else {
+            posix_spawn_file_actions_adddup2(&fileActions, stdinPipe[0], STDIN_FILENO)
+        }
+        if let stdoutFile {
+            posix_spawn_file_actions_addopen(&fileActions, STDOUT_FILENO, stdoutFile, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+        } else {
+            posix_spawn_file_actions_adddup2(&fileActions, stdoutPipe[1], STDOUT_FILENO)
+        }
+        posix_spawn_file_actions_adddup2(&fileActions, stderrPipe[1], STDERR_FILENO)
+
+        var argv: [UnsafeMutablePointer<CChar>?] = ([path] + arguments).map { strdup($0) }
+        argv.append(nil)
+        defer { for pointer in argv { free(pointer) } }
+
+        var pid: pid_t = 0
+        let spawnResult = posix_spawn(&pid, path, &fileActions, nil, &argv, nil)
+        posix_spawn_file_actions_destroy(&fileActions)
+        // the parent's copies of the child's ends must go, or the pipes never
+        // reach EOF.
+        if stdinFile == nil { close(stdinPipe[0]) }
+        if stdoutFile == nil { close(stdoutPipe[1]) }
+        close(stderrPipe[1])
+
+        guard spawnResult == 0 else {
+            if stdinFile == nil { close(stdinPipe[1]) }
+            if stdoutFile == nil { close(stdoutPipe[0]) }
+            close(stderrPipe[0])
+            throw SpawnError.spawnFailed("posix_spawn failed: \(String(cString: strerror(spawnResult)))")
+        }
+        return SpawnedTool(pid: pid, stdinWrite: stdinPipe[1], stdoutRead: stdoutPipe[0], stderrRead: stderrPipe[0])
+    }
+
     /// Blocks (with a bounded sleep loop) until the child exits, then returns
     /// the decoded exit. Kills the child on timeout so a broken tool cannot
     /// wedge the suite.
@@ -292,5 +358,59 @@ struct StdinToolE2ETests {
 
         let stdout = drain(fd: tool.stdoutRead)
         #expect(stdout.contains(#""Error: Access denied: admin""#))
+    }
+
+    @Test("a regular-file stdin is rejected before transport start, naming the stream")
+    func regularFileStdinIsRejected() async throws {
+        let inFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mcp-preflight-stdin-\(UUID().uuidString).json").path
+        try Data(#"{"tool":"echo","args":{"message":"hi"}}"#.utf8).write(to: URL(fileURLWithPath: inFile))
+        defer { try? FileManager.default.removeItem(atPath: inFile) }
+
+        // the harness shape `< file`: a perfectly valid frame, on a stream that
+        // can never deliver it.
+        let tool = try SpawnedTool.spawnWithFileStreams(path: try fixtureToolPath(), stdinFile: inFile)
+        let exit = try await tool.waitForExit()
+        #expect(exit == .code(1))
+
+        let stdout = drain(fd: tool.stdoutRead, quiet: 0.1)
+        #expect(stdout.isEmpty)
+        let stderr = drain(fd: tool.stderrRead, quiet: 0.1)
+        #expect(stderr.contains("stdin"))
+        #expect(stderr.contains("regular file"))
+        // the whole point of the preflight: not NIO's opaque transport-start
+        // failure, which names neither the stream nor the cause.
+        #expect(!stderr.contains("Operation unsupported"))
+    }
+
+    @Test("a regular-file stdout is rejected for transport, but --mcp-manifest may write to one")
+    func regularFileStdoutShape() async throws {
+        let dir = FileManager.default.temporaryDirectory
+
+        // (a) the frame path: a redirected stdout is rejected up front, named,
+        // and nothing is written into the file.
+        let outFile = dir.appendingPathComponent("mcp-preflight-stdout-\(UUID().uuidString).json").path
+        defer { try? FileManager.default.removeItem(atPath: outFile) }
+        let transport = try SpawnedTool.spawnWithFileStreams(path: try fixtureToolPath(), stdoutFile: outFile)
+        let exit = try await transport.waitForExit()
+        #expect(exit == .code(1))
+        let stderr = drain(fd: transport.stderrRead, quiet: 0.1)
+        #expect(stderr.contains("stdout"))
+        #expect(!stderr.contains("Operation unsupported"))
+        #expect((try? String(contentsOfFile: outFile, encoding: .utf8))?.isEmpty ?? true)
+
+        // (b) the install path: introspection is answered before the preflight,
+        // so `my-tool --mcp-manifest arc > manifest.json` still works.
+        let manifestFile = dir.appendingPathComponent("mcp-preflight-manifest-\(UUID().uuidString).json").path
+        defer { try? FileManager.default.removeItem(atPath: manifestFile) }
+        let manifest = try SpawnedTool.spawnWithFileStreams(
+            path: try fixtureToolPath(),
+            arguments: ["--mcp-manifest", "arc"],
+            stdoutFile: manifestFile
+        )
+        let manifestExit = try await manifest.waitForExit()
+        #expect(manifestExit == .code(0))
+        let written = try String(contentsOfFile: manifestFile, encoding: .utf8)
+        #expect(written.contains("\"mcp-fixture-tool\""))
     }
 }
