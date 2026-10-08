@@ -144,20 +144,17 @@ MCP-by-subprocess via SwiftSlash 5.0 bring-your-own data channels.
 - `MCPServer`'s drain-then-close and the client read loop are order-safe
   under the new demand-driven reads (verified against the real mcp Python
   SDK in both roles).
-
-### Known issues
-
-- Every one-shot invocation still writes two QuickJSON debug lines to stderr (a
-  construction banner, 346 B) ahead of the host's own output. QuickJSON's
-  default logger is created lazily at `logLevel: .debug`, and the banner is
-  emitted *at creation* — so a host-side reassignment to `.critical` is itself
-  the trigger that creates the logger. Suppression is impossible from this
-  side; the fix is QuickJSON's own default, which its `AGENTS.md` already
-  specifies as `.critical`. `ToolPackTests` accordingly asserts this
-  framework's own stderr discipline (a success authors nothing, a failure
-  authors exactly one line) with the dependency lines filtered through a
-  documented helper — a filter that becomes a no-op once the dependency is
-  corrected.
+- The two QuickJSON debug lines that preceded every one-shot invocation's
+  output are gone (346 B of construction banner per process). They came from
+  QuickJSON's `Encoding.logger`/`Decoding.logger` statics, which were built at
+  `logLevel: .debug` while every other statement of that contract — its
+  `AGENTS.md`, its own `CHANGELOG`, the `logLevel` parameters on
+  `encode`/`decode`, and every container initializer — says `.critical`. There
+  was no host-side fix: constructing any container reads the static, so the
+  banner was emitted *by* the read that would have suppressed it. Fixed in
+  QuickJSON v2.0.2 (pinned here), and `ToolPackTests` now asserts its stderr
+  contract against the **raw** stderr rather than a filtered view — a banner
+  returning is a failing test, not a tolerated line.
 
 ### Removed
 

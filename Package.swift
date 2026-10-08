@@ -44,7 +44,7 @@ let package = Package(
         // QuickJSON v2 — Foundation-free JSON codec (yyjson-backed).
         .package(
             url: "https://github.com/tannerdsilva/QuickJSON.git",
-            from: "2.0.0"
+            from: "2.0.3"
         ),
         // SwiftSlash v5 — bring-your-own data channels: bind a caller-owned
         // NIO pipe channel onto a spawned child's stdio while SwiftSlash
