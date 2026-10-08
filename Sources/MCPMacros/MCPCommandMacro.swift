@@ -263,7 +263,7 @@ public struct MCPCommandMacro: ExtensionMacro {
         } else {
             invokeBody = """
                         let output = \(invokeCall)
-                        return .text(String(describing: output))
+                        return .render(output)
             """
         }
 

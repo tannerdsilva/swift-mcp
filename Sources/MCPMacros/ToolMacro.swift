@@ -334,7 +334,7 @@ public struct ToolMacro: PeerMacro {
         } else {
             invokeBody = """
                         let output = \(tryPrefix)\(awaitPrefix)run()
-                        return .text(String(describing: output))
+                        return .render(output)
             """
         }
 

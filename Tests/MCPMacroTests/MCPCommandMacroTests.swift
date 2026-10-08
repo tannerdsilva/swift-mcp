@@ -106,7 +106,7 @@ func mcpCommandWithArgument() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = try await run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -157,7 +157,7 @@ func mcpCommandWithOption() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = try await run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -208,7 +208,7 @@ func mcpCommandWithFlag() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = try await run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -259,7 +259,7 @@ func mcpCommandWithName() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = try await run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -328,7 +328,7 @@ func mcpCommandMixed() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = try await run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -390,7 +390,7 @@ func mcpCommandWithOptionGroup() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = try await run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -441,7 +441,7 @@ func mcpCommandWithEnumValues() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = try await run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -973,7 +973,7 @@ func toolMacroSimple() {
         
                 public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = run()
-                        return .text(String(describing: output))
+                        return .render(output)
                 }
             }
         }
@@ -1029,7 +1029,7 @@ func toolMacroWithOptions() {
         
                 public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = run()
-                        return .text(String(describing: output))
+                        return .render(output)
                 }
             }
         }
@@ -1087,7 +1087,7 @@ func toolMacroAsync() {
         
                 public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = try await run()
-                        return .text(String(describing: output))
+                        return .render(output)
                 }
             }
         }
@@ -1186,7 +1186,7 @@ func mcpCommandEmpty() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -1230,7 +1230,7 @@ func mcpCommandSyncNonThrowing() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -1273,7 +1273,7 @@ func mcpCommandAsyncNonThrowing() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = await run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -1315,7 +1315,7 @@ func mcpCommandSyncThrowing() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = try run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -1367,7 +1367,7 @@ func mcpCommandOptionalOnlyHasNoSetParams() {
         
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -1408,7 +1408,7 @@ func mcpCommandNoMemberRunFallsBack() {
 
             public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = run()
-                        return .text(String(describing: output))
+                        return .render(output)
             }
         }
         """,
@@ -1480,7 +1480,7 @@ func funcToolIntReturn() {
         
                 public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
                         let output = run()
-                        return .text(String(describing: output))
+                        return .render(output)
                 }
             }
         }

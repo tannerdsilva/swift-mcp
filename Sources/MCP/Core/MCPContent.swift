@@ -9,6 +9,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+import QuickJSON
+
 /// Content blocks that can be returned from an MCP tool invocation.
 ///
 /// MCP tools return an array of content blocks. The supported types mirror
@@ -156,6 +158,58 @@ public struct MCPToolResult: Sendable, Codable {
     /// ```
     public static func text(_ text: String) -> MCPToolResult {
         MCPToolResult(content: [.text(text)])
+    }
+
+    /// Creates a result from a tool's return value.
+    ///
+    /// This is what a `@MCPCommand` tool's `run()` return becomes on the wire,
+    /// and the compiler picks the overload — a tool author never chooses a
+    /// rendering mode:
+    ///
+    /// - a `String` is the result **verbatim**, never re-quoted, so a tool that
+    ///   returns a JSON document returns that document;
+    /// - any `Encodable` value becomes **compact canonical JSON**, so a
+    ///   structured return is machine-readable instead of a debug description;
+    /// - anything else falls back to `String(describing:)`, so a return type
+    ///   that cannot encode still answers rather than failing to compile.
+    ///
+    /// ```swift
+    /// return .render("hello")                    // hello
+    /// return .render(3)                          // 3
+    /// return .render(Stats(lines: 2, words: 3))  // {"lines":2,"words":3}
+    /// ```
+    public static func render(_ text: String) -> MCPToolResult {
+        .text(text)
+    }
+
+    /// Renders an `Encodable` return value as compact canonical JSON.
+    ///
+    /// Canonical rather than merely compact: the encoder is position-based and
+    /// a dictionary-shaped value iterates in per-process hash order, so
+    /// encoding straight to bytes would give the same value different renders
+    /// on different runs. Round-tripping through the canonical wrapper makes
+    /// the render a function of the value alone, so a consumer may compare or
+    /// hash renders.
+    ///
+    /// Both steps degrade instead of throwing: a value that cannot encode, or
+    /// whose canonical form cannot be produced, renders as its description.
+    public static func render<T: Encodable>(_ value: T) -> MCPToolResult {
+        guard let bytes = try? QuickJSON.encode(value) else {
+            return .text(String(describing: value))
+        }
+        if let decoded = try? QuickJSON.decode(AnyCodable.self, from: bytes),
+           let canonical = try? QuickJSON.encode(CanonicalJSON(decoded.value)) {
+            return .text(String(decoding: canonical, as: UTF8.self))
+        }
+        return .text(String(decoding: bytes, as: UTF8.self))
+    }
+
+    /// Renders a return value that is not `Encodable` as its description.
+    ///
+    /// The least specific overload, so it is chosen only when nothing better
+    /// applies.
+    public static func render<T>(_ value: T) -> MCPToolResult {
+        .text(String(describing: value))
     }
 
     /// Creates an error result with a message.

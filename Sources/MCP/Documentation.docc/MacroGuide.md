@@ -185,7 +185,7 @@ extension Greet: MCPTool {
     public mutating func apply(arguments: [String: Any]) throws { ... }
     public mutating func invoke(context: MCPContext) async throws -> MCPToolResult {
         let output = try run()
-        return .text(String(describing: output))
+        return .render(output)
     }
 }
 ```
