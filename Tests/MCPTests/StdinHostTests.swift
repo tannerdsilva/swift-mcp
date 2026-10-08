@@ -317,4 +317,88 @@ struct StdinHostIntrospectionTests {
             #expect(error == .executablePathUnresolved)
         }
     }
+
+    @Test("--mcp-describe emits exactly one canonical tool object and never reads stdin")
+    func describeIntrospectionEmitsOneTool() async throws {
+        let pair = makeHostPair(dispatcher: AppServer(), arguments: ["test-tool", "--mcp-describe", "greet"])
+
+        // stdin stays open and empty: completing proves it was never waited on.
+        try await pair.host.run()
+
+        let text = hostReadUntil(fd: pair.outputRead.fileDescriptor, timeout: 2) { $0.hasSuffix("\n") }
+        // exactly one framed line: a single tool, not the catalog.
+        #expect(text.filter { $0 == "\n" }.count == 1)
+
+        let decoded = try #require(decodeFrame(Array(text.utf8)) as? [String: Any])
+        #expect(decoded["name"] as? String == "greet")
+        #expect(decoded["version"] == nil)   // no binary identity on a tool object
+        #expect(decoded["tools"] == nil)
+        #expect((decoded["inputSchema"] as? [String: Any])?["type"] as? String == "object")
+    }
+
+    @Test("--mcp-describe agrees with the entry --mcp-list serves, byte for byte")
+    func describeMatchesListEntry() async throws {
+        let described = makeHostPair(dispatcher: AppServer(), arguments: ["test-tool", "--mcp-describe", "calculate"])
+        try await described.host.run()
+        let describedText = hostReadUntil(fd: described.outputRead.fileDescriptor, timeout: 2) { $0.hasSuffix("\n") }
+
+        let listed = makeHostPair(dispatcher: AppServer(), arguments: ["test-tool", "--mcp-list"])
+        try await listed.host.run()
+        let catalogText = hostReadUntil(fd: listed.outputRead.fileDescriptor, timeout: 2) { $0.hasSuffix("\n") }
+        let catalog = try #require(decodeFrame(Array(catalogText.utf8)) as? [String: Any])
+        let tools = try #require(catalog["tools"] as? [[String: Any]])
+        let entry = try #require(tools.first { $0["name"] as? String == "calculate" })
+
+        // both routes encode the same `Tool` through the same canonical
+        // encoder, so the two outputs are identical — no second renderer to
+        // drift.
+        #expect(decodeFrame(Array(describedText.utf8)) as? NSDictionary == entry as NSDictionary)
+    }
+
+    @Test("--mcp-describe of an unknown tool throws a named error with silent stdout")
+    func describeUnknownToolFails() async throws {
+        let pair = makeHostPair(dispatcher: AppServer(), arguments: ["test-tool", "--mcp-describe", "nope"])
+
+        do {
+            try await pair.host.run()
+            Issue.record("expected run() to throw for an unknown tool")
+        } catch let error as MCPStdinHostError {
+            #expect(error == .toolNotFound("nope"))
+        }
+        // the one-line diagnostic is stderr-side (the entry maps the throw to
+        // exit 1); stdout stays silent.
+        #expect(hostRead(fd: pair.outputRead.fileDescriptor, timeout: 0.3).isEmpty)
+    }
+
+    @Test("--version emits the binary's version as one canonical object, without stdin")
+    func versionIntrospection() async throws {
+        let pair = makeHostPair(dispatcher: AppServer(), arguments: ["test-tool", "--version"])
+
+        try await pair.host.run()
+
+        let text = hostReadUntil(fd: pair.outputRead.fileDescriptor, timeout: 2) { $0.hasSuffix("\n") }
+        let decoded = try #require(decodeFrame(Array(text.utf8)) as? [String: Any])
+        #expect(decoded["version"] as? String == "1.0.0")
+        #expect(decoded.count == 1)
+    }
+
+    @Test("every introspection flag spelling parses; argv[0] is skipped, later tokens are found")
+    func introspectionFlagSpellings() {
+        let cases: [(arguments: [String], kind: MCPIntrospectionRequest.Kind?)] = [
+            (["t", "--mcp-list"], .list),
+            (["t", "--mcp-manifest", "arc"], .manifest("arc")),
+            (["t", "--mcp-manifest=arc"], .manifest("arc")),
+            (["t", "--mcp-describe", "greet"], .describe("greet")),
+            (["t", "--mcp-describe=greet"], .describe("greet")),
+            (["t", "--version"], .version),
+            (["t"], nil),
+            (["t", "--wat"], nil),
+            // a subcommand-routed pack passes its own tokens first — the host's
+            // flags must still be found behind them.
+            (["t", "plugin", "--mcp-describe=greet"], .describe("greet")),
+        ]
+        for entry in cases {
+            #expect(MCPIntrospectionRequest.parse(arguments: entry.arguments)?.kind == entry.kind)
+        }
+    }
 }

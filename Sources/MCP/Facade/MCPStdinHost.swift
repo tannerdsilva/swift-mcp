@@ -54,6 +54,9 @@ public enum MCPStdinHostError: Error, Sendable, Equatable, CustomStringConvertib
     /// stream either, so EOF is not observed. Without a deadline that is a
     /// silent hang with no output on either stream.
     case noFrameWithinDeadline
+    /// `--mcp-describe <tool>` named a tool the compiled surface does not
+    /// carry.
+    case toolNotFound(String)
 
     public var description: String {
         switch self {
@@ -73,6 +76,8 @@ public enum MCPStdinHostError: Error, Sendable, Equatable, CustomStringConvertib
             "\(stream) (fd \(descriptor)) is a regular file, not a pipe: a one-shot tool exchanges frames over pipes, so a shell redirect (`< file` / `> file`) cannot drive it"
         case .noFrameWithinDeadline:
             "no frame arrived before the first-frame deadline: the transport delivers complete frames only, so every frame must end with a newline"
+        case .toolNotFound(let name):
+            "unknown tool: \(name)"
         }
     }
 }
@@ -423,8 +428,8 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
 
     // MARK: - Introspection
 
-    /// Serves `--mcp-list` / `--mcp-manifest <name>` from the compiled
-    /// surface; never reads stdin.
+    /// Serves `--mcp-list` / `--mcp-manifest <name>` / `--mcp-describe <tool>`
+    /// / `--version` from the compiled surface; never reads stdin.
     private func emitIntrospection(for request: MCPIntrospectionRequest) throws {
         switch request.kind {
         case .list:
@@ -453,6 +458,25 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
                 invocationArguments: configuration.manifestInvocationArguments
             )
             try Self.writeLine(try format.encode(catalog, context: context), to: configuration.outputFD)
+        case .describe(let toolName):
+            let catalog = MCPToolCatalog.discover(
+                name: name,
+                version: version,
+                description: description,
+                dispatcher: dispatcher
+            )
+            guard let tool = catalog.tools.first(where: { $0.name == toolName }) else {
+                throw MCPStdinHostError.toolNotFound(toolName)
+            }
+            // `Tool`'s own encoding is canonical (keys sorted, schema
+            // recursively sorted), so this entry is byte-identical to the same
+            // entry inside `--mcp-list`.
+            try Self.writeLine(try QuickJSON.encode(tool), to: configuration.outputFD)
+        case .version:
+            // an object rather than a bare string: every introspection output
+            // is one newline-framed JSON document, so a harness never needs a
+            // second decoding path for the version.
+            try Self.writeLine(try QuickJSON.encode(CanonicalJSON(["version": version])), to: configuration.outputFD)
         }
     }
 
@@ -560,12 +584,17 @@ struct MCPIntrospectionRequest: Sendable, Equatable {
     enum Kind: Sendable, Equatable {
         case list
         case manifest(String)
+        /// one tool's schema, by name
+        case describe(String)
+        /// the binary's own version
+        case version
     }
 
     let kind: Kind
 
-    /// Parses `--mcp-list` / `--mcp-manifest <name>` (`--mcp-manifest=<name>`
-    /// accepted too) from process arguments, skipping `argv[0]`.
+    /// Parses `--mcp-list`, `--mcp-manifest <name>`, `--mcp-describe <tool>`
+    /// (the `=<value>` spelling accepted too) and `--version` from process
+    /// arguments, skipping `argv[0]`.
     static func parse(arguments: [String]) -> MCPIntrospectionRequest? {
         var iterator = arguments.dropFirst().makeIterator()
         while let argument = iterator.next() {
@@ -577,6 +606,15 @@ struct MCPIntrospectionRequest: Sendable, Equatable {
             }
             if argument.hasPrefix("--mcp-manifest=") {
                 return MCPIntrospectionRequest(kind: .manifest(String(argument.dropFirst("--mcp-manifest=".count))))
+            }
+            if argument == "--mcp-describe" {
+                return MCPIntrospectionRequest(kind: .describe(iterator.next() ?? ""))
+            }
+            if argument.hasPrefix("--mcp-describe=") {
+                return MCPIntrospectionRequest(kind: .describe(String(argument.dropFirst("--mcp-describe=".count))))
+            }
+            if argument == "--version" {
+                return MCPIntrospectionRequest(kind: .version)
             }
         }
         return nil
