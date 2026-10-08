@@ -413,4 +413,18 @@ struct StdinToolE2ETests {
         let written = try String(contentsOfFile: manifestFile, encoding: .utf8)
         #expect(written.contains("\"mcp-fixture-tool\""))
     }
+
+    @Test("/dev/null on stdin stays allowed — a char device is not a regular file")
+    func characterDeviceStdinIsAllowed() async throws {
+        // the preflight tests S_IFREG, not "is it a tty". /dev/null must keep
+        // working, and the failure it does produce must be the host's own
+        // empty-stdin contract, never the preflight.
+        let tool = try SpawnedTool.spawnWithFileStreams(path: try fixtureToolPath(), stdinFile: "/dev/null")
+        let exit = try await tool.waitForExit()
+        #expect(exit == .code(1))
+
+        let stderr = drain(fd: tool.stderrRead, quiet: 0.1)
+        #expect(!stderr.contains("regular file"))
+        #expect(stderr.contains("no request received"))
+    }
 }
