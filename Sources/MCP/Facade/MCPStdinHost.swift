@@ -121,7 +121,8 @@ public struct MCPStdinHost<Dispatcher: MCPToolDispatcher>: Service, Sendable {
         /// not recognize still reach the router (which owns classification).
         public var dialects: [any MCPStdinDialect]
 
-        /// Whether `--mcp-list` / `--mcp-manifest <name>` are served.
+        /// Whether the introspection flags are served — `--mcp-list`,
+        /// `--mcp-describe <tool>`, `--mcp-manifest <name>`, and `--version`.
         /// Introspection is answered before the transport starts and never
         /// reads stdin.
         public var introspection: Bool

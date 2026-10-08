@@ -258,6 +258,44 @@ The macro wraps the tool's enum case, dispatch branch, catalog entry, and
 access gate in `#if DEBUG`, so a release build neither lists it nor invokes
 it.
 
+### One-Shot Interface
+
+Pass `interface: .oneShot` to compile the host straight into the binary instead
+of generating a session server — the generated `main()` becomes an
+``MCPStdinHost``:
+
+```swift
+@main
+@MCPApplication(name: "my-tool", version: "1.0.0", interface: .oneShot)
+struct MyTool {
+    @Tool var greet = Greet()
+}
+```
+
+`address` and `transport` are rejected by diagnostic in this mode: a one-shot
+binary answers frames on stdin and has no listening socket.
+
+When the one-shot entry sits behind a subcommand, pass
+`manifestInvocationArguments:` so the generated manifest tells a harness how to
+invoke the binary:
+
+```swift
+@MCPApplication(
+    name: "my-tool",
+    version: "1.0.0",
+    interface: .oneShot,
+    manifestInvocationArguments: ["plugin"]   // the harness spawns `<bin> plugin`
+)
+```
+
+Without it the manifest advertises `args: []` and a harness calls the binary
+bare, where its subcommand is missing. The value is baked into the generated
+host configuration at compile time. Passing it with `.session` is a diagnostic —
+a session server has no manifest.
+
+See <doc:StdinTools> for the wire protocol and <doc:ToolPacks> for exposing many
+tools from one binary.
+
 ### Address Binding
 
 Pass an address to bind to a specific network interface:

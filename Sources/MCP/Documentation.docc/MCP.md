@@ -27,7 +27,8 @@ the wire: it serves tools and consumes them as a client.
 - **One-shot stdin tools**: `interface: .oneShot` on `@MCPApplication`
   compiles a tool binary that speaks the harness plugin envelope and JSON-RPC,
   serves its own catalog and manifests — and is as easy to declare as an argv
-  CLI. See <doc:StdinTools>.
+  CLI. One binary can expose a whole *pack* of tools. See <doc:StdinTools> and
+  <doc:ToolPacks>.
 - **Transport abstraction**: ``MCPTransport`` (server role) and
   ``ClientTransport`` (client role) with IPv4, IPv6, dual-stack, and Unix
   domain socket support.
@@ -85,6 +86,7 @@ the wire: it serves tools and consumes them as a client.
 ### One-Shot Tools
 
 - <doc:StdinTools>
+- <doc:ToolPacks>
 - ``MCPInterface``
 - ``MCPStdinHost``
 - ``MCPStdinDialect``

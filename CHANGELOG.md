@@ -48,6 +48,28 @@ MCP-by-subprocess via SwiftSlash 5.0 bring-your-own data channels.
     (`--mcp-list`, `--mcp-manifest arc`), canonical sorted-key output.
   - `MCPFixtureTool` — test-fixture one-shot binary spawned by the end-to-end
     suite (plugin, JSON-RPC, introspection, exit contract, `MCP_ACCESS_LEVEL`).
+- **Tool packs** — authoring a fleet of one-shot tools as one binary
+  (`Sources/MCP/Documentation.docc/ToolPacks.md`):
+  - `--mcp-describe <tool>` (one canonical tool object) and `--version`
+    introspection. An unserved format or an unknown tool exits `1` with one
+    diagnostic line on stderr and nothing on stdout.
+  - `@MCPApplication(manifestInvocationArguments:)` — a pack whose one-shot
+    entry sits behind a subcommand advertises the real argv in its generated
+    manifest; `.session` with the attribute is a diagnostic.
+  - `MCPStdinHost.Configuration.firstFrameTimeout` — an opt-in deadline that
+    turns a silent no-frame hang into a named exit `1`; the default still
+    waits indefinitely.
+  - Standard-stream preflight — a regular-file stdin or stdout is refused
+    *before* the transport starts, naming the offending stream and descriptor
+    (`MCPStdinHostError.standardStreamIsNotAPipe`). `/dev/null` and other
+    character devices stay allowed.
+  - `MCPToolTestKit` — the spawn harness exported as a library target
+    (`SpawnedTool`, `ToolExit`, `drain(fd:)`, `pluginFrame(tool:args:)`), so a
+    pack's spawned end-to-end test is ~10 lines instead of ~110.
+  - `MCPToolPack` (twelve tools spanning every return shape the facade
+    supports) and `MCPTwoFilePack` (MCP tools and an `ArgumentParser` argv
+    front door in separate files) — compiled reference packs the suite drives
+    as real spawned processes.
 - Dependency: `tannerdsilva/SwiftSlash` 5.0.0 (dependency-free).
 
 ### Changed
@@ -82,6 +104,17 @@ MCP-by-subprocess via SwiftSlash 5.0 bring-your-own data channels.
   is nothing to retry.
 - `SubprocessClientTransport` exposes the child's stderr as a live line
   stream (`stderrLines()`) via the built-in SwiftSlash pipeline.
+- `ArcPluginManifest` emits **compact** canonical JSON by default — sorted keys
+  at every depth, no insignificant whitespace (2266 B across 88 lines → 1484 B
+  across 1 on the fixture pack; a harness reads these bytes on every load, so
+  their size is a token cost). The two-space reviewable form is the same format
+  under its own name, `ArcPluginManifest.Pretty` (`--mcp-manifest arc-pretty`),
+  and both spellings decode to the same document.
+- A tool's return value now renders by its shape (`MCPToolResult.render`):
+  `String` verbatim, any `Encodable` as compact JSON, anything else
+  `String(describing:)`. This **changes observable output** for tools returning
+  an `Encodable` other than `String`: they previously reached the caller as
+  Swift debug text (`Foo(a: 1, b: 2)`) and now arrive as a JSON document.
 
 ### Fixed
 
@@ -111,6 +144,20 @@ MCP-by-subprocess via SwiftSlash 5.0 bring-your-own data channels.
 - `MCPServer`'s drain-then-close and the client read loop are order-safe
   under the new demand-driven reads (verified against the real mcp Python
   SDK in both roles).
+
+### Known issues
+
+- Every one-shot invocation still writes two QuickJSON debug lines to stderr (a
+  construction banner, 346 B) ahead of the host's own output. QuickJSON's
+  default logger is created lazily at `logLevel: .debug`, and the banner is
+  emitted *at creation* — so a host-side reassignment to `.critical` is itself
+  the trigger that creates the logger. Suppression is impossible from this
+  side; the fix is QuickJSON's own default, which its `AGENTS.md` already
+  specifies as `.critical`. `ToolPackTests` accordingly asserts this
+  framework's own stderr discipline (a success authors nothing, a failure
+  authors exactly one line) with the dependency lines filtered through a
+  documented helper — a filter that becomes a no-op once the dependency is
+  corrected.
 
 ### Removed
 

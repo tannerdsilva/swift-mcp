@@ -98,9 +98,18 @@ $ my-tool --mcp-manifest arc-pretty
   "tools" : [ { "args" : [], "command" : "/usr/local/bin/my-tool", … } ],
   "version" : "1.0.0"
 }
+
+$ my-tool --mcp-describe greet
+{"description":"…","inputSchema":{…},"name":"greet"}
+
+$ my-tool --version
+{"version":"1.0.0"}
 ```
 
-`--mcp-list` emits the ``MCPToolCatalog``; `--mcp-manifest <name>` renders it
+`--mcp-list` emits the ``MCPToolCatalog``; `--mcp-describe <tool>` emits that one
+tool's ``MCPToolCatalog/Tool`` object, so an agent fetches a single schema
+instead of the whole catalog; `--version` emits the binary's version.
+`--mcp-manifest <name>` renders the catalog
 through a ``MCPToolManifestFormat`` — the arc format (``ArcPluginManifest``)
 ships first, and a consumer with its own harness adds a conformance instead of
 patching the framework.
@@ -112,8 +121,24 @@ same format under its own name, ``ArcPluginManifest/Pretty``
 (`--mcp-manifest arc-pretty`); the name **is** the opt-in, and the two spellings
 decode to the same document.
 
-Both flags bypass the transport entirely, so they work even when the standard
-streams are redirected to files.
+Every introspection flag bypasses the transport entirely and reads no stdin, so
+they work even when the standard streams are redirected to files. A request
+that cannot be served — `--mcp-manifest` naming an unserved format,
+`--mcp-describe` naming a tool the compiled surface does not carry — exits `1`
+with one diagnostic line on stderr and nothing on stdout.
+
+## Results
+
+A tool's return value is rendered by its shape, resolved at compile time:
+
+- `String` — verbatim. A JSON document you return stays a JSON document rather
+  than becoming a quoted string.
+- any `Encodable` type — compact canonical JSON, so a structured return arrives
+  as a document the caller can decode.
+- anything else — `String(describing:)`.
+
+The plugin envelope places it under `result`; JSON-RPC wraps it in the standard
+`content` array with `isError`.
 
 ## Dialects
 
@@ -145,9 +170,19 @@ contract onto the process, which is what the generated `main()` calls.
 ## Requirements and limits
 
 - **Standard streams must be pipes.** The NIO pipe channel that carries stdin
-  rejects regular files, so `my-tool > out.json` fails at transport setup;
-  harnesses always spawn with pipes, and the introspection flags bypass the
-  transport (redirect them freely).
+  rejects regular files, so `my-tool > out.json` fails *before* the transport
+  starts: exit `1`, nothing on stdout, and one stderr line naming the offending
+  stream and descriptor
+  (``MCPStdinHostError/standardStreamIsNotAPipe(stream:descriptor:)``).
+  Harnesses always spawn with pipes, and the introspection flags bypass the
+  transport entirely (redirect them freely).
+- **An unterminated frame is invisible.** The transport hands over complete
+  frames only: a producer that never writes the terminating newline never
+  delivers a frame, and an open stream is never observed as EOF, so the process
+  waits with nothing on either stream. `MCPStdinHost.Configuration.firstFrameTimeout`
+  bounds that wait — exit `1` with ``MCPStdinHostError/noFrameWithinDeadline``.
+  The default (`nil`) waits indefinitely, because a session-shaped peer may
+  legitimately idle.
 - **One frame per spawn is the convention.** Pipelined frames enter the engine
   in arbitrary order (they are independent tasks, paired by JSON-RPC id) — the
   same contract the session server documents.
@@ -157,6 +192,10 @@ contract onto the process, which is what the generated `main()` calls.
   importing each framework where it is used.
 
 ## Topics
+
+### Authoring a fleet
+
+- <doc:ToolPacks>
 
 ### Declaring a tool binary
 

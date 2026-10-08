@@ -102,6 +102,9 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
         ///   - executable: The server executable path or `PATH` name.
         ///   - arguments: Arguments for the executable.
         ///   - environment: Extra environment values (merged over the parent's).
+        ///   - inheritParentEnvironment: Whether the child inherits the parent's
+        ///     environment (`true`, the default) or is spawned with exactly
+        ///     `environment` (`false`).
         ///   - workingDirectory: Optional working directory for the child.
         ///   - maxMessageSize: Max client-side frame size (default 10 MiB).
         ///   - shutdownGrace: Grace period before signal escalation (default 2s).

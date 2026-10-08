@@ -6,7 +6,7 @@
 
 ---
 
-> **📖 Documentation:** This project uses [DocC](https://swift.org/documentation/docc) as its primary documentation format. The authoritative catalog lives in `Sources/MCP/Documentation.docc/`. Build it with `swift package --disable-sandbox generate-documentation`.
+> **📖 Documentation:** This project uses [DocC](https://swift.org/documentation/docc) as its primary documentation format. The authoritative catalog lives in `Sources/MCP/Documentation.docc/`. Build it with `swift package --disable-sandbox generate-documentation --target MCP --target MCPToolTestKit` — name the library targets, because the bare whole-package form trips Swift-DocC over the macro target.
 
 ## Overview
 
@@ -38,6 +38,7 @@ try await server.runService()
 - **`@FuncTool` macro** — generate MCP tools from plain functions
 - **`@MCPApplication` macro** — full server entry point generation with exhaustive, type-preserving dispatch
 - **One-shot stdin tools** — `interface: .oneShot` compiles a tool binary that speaks the harness plugin envelope and JSON-RPC, serves its own catalog and manifests ([guide](Sources/MCP/Documentation.docc/StdinTools.md))
+- **Tool packs** — one `interface: .oneShot` binary exposes a whole fleet of tools and installs as a single harness plugin, with `--mcp-list` / `--mcp-describe <tool>` / `--mcp-version`-style introspection an agent can drive ([guide](Sources/MCP/Documentation.docc/ToolPacks.md))
 - **Property wrappers** — `@Argument`, `@Option`, `@Flag`, `@OptionGroup`
 - **Automatic JSON Schema** — tool parameters are described in JSON Schema Draft 7
 - **Compile-time discovery** — parameters are discovered via macro-generated code, no runtime reflection
@@ -292,7 +293,8 @@ A family of comprehensive, working examples lives in
 ## Testing
 
 ```bash
-swift test
+swift build   # first — spawned suites run .build/debug/{MCPFixtureServer,MCPFixtureTool,MCPToolPack,…}
+swift test    # 280 tests in 17 suites + 38 macro tests
 ```
 
 The suite covers:
@@ -304,6 +306,8 @@ The suite covers:
 - Macro expansion and diagnostics for all macros
 - Server message handling (initialize, tools/list, tools/call, ping, notifications)
 - Stdio and TCP transports end-to-end (EOF, shutdown, real-socket round trips)
+- One-shot stdin facade end-to-end (plugin + JSON-RPC envelopes, exit contract, std-stream preflight, first-frame deadline)
+- Tool packs: catalog/manifest shape, compact-manifest determinism, twelve-tool dispatch, stderr discipline
 - Default access-resolver behavior (IPv4/IPv6 loopback)
 - `@MCPApplication` macro (ToolID enum, debug-only tools, address and transport binding)
 - Dynamic tool registration, unregistration, and concurrent-registry safety
