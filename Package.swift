@@ -30,7 +30,11 @@ let package = Package(
             from: "1.6.0"
         ),
         .package(
-            url: "https://github.com/apple/swift-syntax.git",
+            // canonical home — swift-syntax moved to the swiftlang org; the old
+            // apple URL resolves to the same identity, which makes SwiftPM emit
+            // a conflicting-identity warning for consumers and is slated to
+            // become a hard error.
+            url: "https://github.com/swiftlang/swift-syntax.git",
             "603.0.0"..<"604.0.0"
         ),
         .package(

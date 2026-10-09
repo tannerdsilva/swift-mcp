@@ -118,6 +118,12 @@ MCP-by-subprocess via SwiftSlash 5.0 bring-your-own data channels.
 
 ### Fixed
 
+- **Dependency hygiene:** swift-syntax is pinned at its canonical
+  `swiftlang/swift-syntax` URL (the package moved from the apple org).  the
+  old URL resolved to the same package identity, so SwiftPM emitted a
+  conflicting-identity warning for consumers that reach swift-syntax by the
+  current URL (swift-package-utilitykit does) — a warning SwiftPM states will
+  be escalated to an error.  no version change (still 603.0.2).
 - The client's request deadline now bounds the **send** leg, not just the
   response await: a peer that stops draining its pipe (wedged event loop,
   stopped process, deadlocked plugin) previously left `sendFrame`'s
