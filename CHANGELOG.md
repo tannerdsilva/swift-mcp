@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.1.1
+
+**Fixed — the client accepts a `tools/call` result that omits `isError`.**
+
+### Fixed
+
+- `ToolCallEnvelope` required `isError`, but the field is optional in the
+  protocol (absent = success) and the current official servers omit it on
+  success — `@modelcontextprotocol/server-filesystem` returns
+  `{"content":[…],"structuredContent":{…}}`. An absent flag failed the whole
+  reply to decode (`MCP invalid response: notFound`), so **every** `callTool`
+  against a real server threw. It now defaults to `false`.
+- the framework's own client tests could not catch this: they drive the in-repo
+  `MCPFixtureServer`, which always encodes the flag (a self-consistent pair).
+  pinned by `MCPClientResultShapeTests`, which decodes frames directly.
+
 ## 2.1.0
 
 **Additive — the one-shot plugin frame carries `isError` alongside `result`,

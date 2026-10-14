@@ -565,7 +565,22 @@ private struct ToolsListEnvelope: Decodable, Sendable {
 }
 
 /// Decodable shape for the `tools/call` result payload.
-private struct ToolCallEnvelope: Decodable, Sendable {
+///
+/// `isError` is optional in the protocol (absent means success) and the current
+/// official servers omit it, so an absent flag must decode as `false` rather
+/// than fail the whole reply. Internal rather than private so the wire shape
+/// can be pinned by a decode test without spawning a server.
+struct ToolCallEnvelope: Decodable, Sendable {
     let content: [MCPContent]
     let isError: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case content, isError
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        content = try container.decode([MCPContent].self, forKey: .content)
+        isError = try container.decodeIfPresent(Bool.self, forKey: .isError) ?? false
+    }
 }
