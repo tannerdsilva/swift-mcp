@@ -229,8 +229,9 @@ public struct MCPToolResult: Sendable, Codable {
     ///
     /// Concatenates every `.text` block newline-separated; non-text blocks
     /// (images, resources) are summarized by their kind so nothing is silently
-    /// dropped. When ``isError`` is `true` the text is prefixed with `error: `
-    /// so the consumer can distinguish a failed invocation from success text.
+    /// dropped. When ``isError`` is `true` the text is prefixed with `Error: `
+    /// — the same spelling the plugin dialect folds into its frame — so the
+    /// consumer can distinguish a failed invocation from success text.
     public var flattenedText: String {
         var parts: [String] = []
         for block in content {
@@ -244,7 +245,7 @@ public struct MCPToolResult: Sendable, Codable {
             }
         }
         let text = parts.joined(separator: "\n")
-        return isError ? "error: \(text)" : text
+        return isError ? "Error: \(text)" : text
     }
 }
 

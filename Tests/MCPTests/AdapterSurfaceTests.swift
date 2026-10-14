@@ -51,7 +51,7 @@ struct AdapterSurfaceTests {
     @Test("MCPToolResult.flattenedText joins text blocks and marks errors")
     func flattenedTextJoinsAndMarks() {
         #expect(MCPToolResult.text("hi").flattenedText == "hi")
-        #expect(MCPToolResult.error("boom").flattenedText == "error: boom")
+        #expect(MCPToolResult.error("boom").flattenedText == "Error: boom")
         #expect(MCPToolResult(content: [.text("a"), .text("b")]).flattenedText == "a\nb")
         #expect(MCPToolResult(content: [.text("a"), .resource(uri: "r1", mimeType: nil, text: nil)]).flattenedText == "a\n[resource: r1]")
     }

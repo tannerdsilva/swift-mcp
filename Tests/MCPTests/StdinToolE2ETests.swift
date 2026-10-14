@@ -51,7 +51,9 @@ struct StdinToolE2ETests {
         #expect(exit == .code(0))
 
         let stdout = drain(fd: tool.stdoutRead)
-        #expect(stdout.trimmingCharacters(in: .whitespacesAndNewlines) == #"{"result":"hi"}"#)
+        let frame = try #require(try JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any])
+        #expect(frame["result"] as? String == "hi")
+        #expect(frame["isError"] as? Bool == false)
     }
 
     @Test("json-rpc frames are served and stdin EOF exits 0")
@@ -79,7 +81,9 @@ struct StdinToolE2ETests {
         #expect(exit == .code(0))
 
         let stdout = drain(fd: tool.stdoutRead)
-        #expect(stdout.trimmingCharacters(in: .whitespacesAndNewlines) == #"{"result":"Error: boom"}"#)
+        let frame = try #require(try JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any])
+        #expect(frame["result"] as? String == "Error: boom")
+        #expect(frame["isError"] as? Bool == true)
     }
 
     @Test("introspection runs without stdin: --mcp-list and --mcp-manifest arc")
@@ -219,7 +223,9 @@ struct StdinToolE2ETests {
         #expect(exit == .code(0))
 
         let stdout = drain(fd: tool.stdoutRead)
-        #expect(stdout.trimmingCharacters(in: .whitespacesAndNewlines) == #"{"result":"hello, tanner"}"#)
+        let frame = try #require(try JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any])
+        #expect(frame["result"] as? String == "hello, tanner")
+        #expect(frame["isError"] as? Bool == false)
     }
 
     @Test("the two-file pack's manifest advertises the subcommand argv, not an empty one")

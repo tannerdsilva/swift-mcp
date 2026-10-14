@@ -176,6 +176,7 @@ struct StdinPluginDialectTests {
         let out = try MCPPluginDialect().respond(response, to: bytes(pluginFrame))
         let harness = out.flatMap { decodeFrame($0) } as? [String: Any]
         #expect(harness?["result"] as? String == "hi")
+        #expect(harness?["isError"] as? Bool == false)
     }
 
     @Test("plugin respond prefixes isError results with \"Error: \"")
@@ -186,6 +187,7 @@ struct StdinPluginDialectTests {
         let out = try MCPPluginDialect().respond(response, to: bytes(pluginFrame))
         let harness = out.flatMap { decodeFrame($0) } as? [String: Any]
         #expect(harness?["result"] as? String == "Error: boom")
+        #expect(harness?["isError"] as? Bool == true)
     }
 
     @Test("plugin respond maps JSON-RPC protocol errors to Error: text")
@@ -196,6 +198,33 @@ struct StdinPluginDialectTests {
         let out = try MCPPluginDialect().respond(response, to: bytes(pluginFrame))
         let harness = out.flatMap { decodeFrame($0) } as? [String: Any]
         #expect(harness?["result"] as? String == "Error: Access denied: admin")
+        #expect(harness?["isError"] as? Bool == true)
+    }
+
+    @Test("both dialects' frames are pinned — the measured fixture")
+    func framesAreTheMeasuredFixture() throws {
+        // the plugin dialect folds a failure into the `result` text AND carries
+        // the flag; the JSON-RPC dialect carries the flag natively, and the
+        // flattened-text marker uses the same spelling on both wires.
+        func responded(_ text: String, isError: Bool) throws -> [String: Any] {
+            let response = encodeFrame(
+                ["jsonrpc": "2.0", "id": 1, "result": ["content": [["type": "text", "text": text]], "isError": isError]] as [String: Any]
+            )
+            let out = try MCPPluginDialect().respond(response, to: bytes(pluginFrame))
+            return try #require(out.flatMap { decodeFrame($0) } as? [String: Any])
+        }
+
+        let success = try responded("hi", isError: false)
+        #expect(success.keys.sorted() == ["isError", "result"])
+        #expect(success["result"] as? String == "hi")
+        #expect(success["isError"] as? Bool == false)
+
+        let failure = try responded("boom", isError: true)
+        #expect(failure.keys.sorted() == ["isError", "result"])
+        #expect(failure["result"] as? String == "Error: boom")
+        #expect(failure["isError"] as? Bool == true)
+
+        #expect(MCPToolResult.error("boom").flattenedText == "Error: boom")
     }
 
     @Test("plugin respond maps a nil response to nil and rejects undecodable responses")

@@ -50,15 +50,15 @@ object; the result is a single JSON object. This is the ``MCPPluginDialect``:
 
 ```jsonc
 // stdin:  {"tool":"greet","args":{"name":"Ada"}}
-// stdout: {"result":"Hello, Ada!"}
+// stdout: {"result":"Hello, Ada!","isError":false}
 ```
 
-Tool failures arrive as text, never as exit codes — the harness contract has
-no error envelope:
+Tool failures arrive as text with an `"isError":true` flag alongside — never as
+exit codes:
 
 ```jsonc
 // stdin:  {"tool":"greet","args":{}}        (with a required argument missing)
-// stdout: {"result":"Error: missing required argument 'name'"}
+// stdout: {"result":"Error: missing required argument 'name'","isError":true}
 ```
 
 The plugin dialect **completes after the first request**: the process answers

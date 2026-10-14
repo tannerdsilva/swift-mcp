@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.1.0
+
+**Additive — the one-shot plugin frame carries `isError` alongside `result`,
+and both dialects spell the failure marker the same way.**
+
+### Changed
+
+- `MCPPluginDialect`'s output frame is now
+  `{"result":"<text>","isError":<bool>}`. Consumers that read `result` (every
+  existing harness adapter) are unaffected; consumers that trusted the tool
+  descriptions' `isError` claim finally have the flag on this dialect too. The
+  `Error: ` fold into the `result` text is unchanged.
+- `MCPToolResult.flattenedText` prefixes a failed result with `Error: ` (was
+  `error: `) — one spelling across both dialects, so a case-sensitive prefix
+  match catches either wire.
+- pinned: `StdinDialectTests.framesAreTheMeasuredFixture` freezes both frames;
+  the spawned-binary E2E tests decode the plugin frame and assert the flag.
+
 ## 2.0.0
 
 Transport unification and the client role: one NIO pipeline serves every

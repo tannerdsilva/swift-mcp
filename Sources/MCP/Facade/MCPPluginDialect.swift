@@ -17,10 +17,10 @@ import QuickJSON
 /// This is the harness envelope (the shape agent hosts use to call one-shot
 /// tool binaries): a single JSON object naming a tool and its arguments.
 /// `route` synthesizes the matching JSON-RPC `tools/call` request for the one
-/// shared router; `respond` flattens the router's reply back into a single
-/// `result` string, because the harness contract has no error envelope —
-/// failures arrive as text with an `Error: ` prefix and are never distinguishable
-/// from success by exit code.
+/// shared router; `respond` flattens the router's reply into the `result`
+/// string plus an `isError` flag. The text of a failure keeps the plugin
+/// convention's `Error: ` prefix; exit codes never distinguish success from
+/// failure.
 ///
 /// ## Completion
 ///
@@ -34,9 +34,9 @@ import QuickJSON
 ///
 /// | router output | harness output |
 /// |---|---|
-/// | `result` with text content, `isError: false` | `{"result":"<text>"}` |
-/// | `result` with text content, `isError: true` | `{"result":"Error: <text>"}` |
-/// | JSON-RPC `error` object (parse, access, unknown tool, …) | `{"result":"Error: <message>"}` |
+/// | `result` with text content, `isError: false` | `{"result":"<text>","isError":false}` |
+/// | `result` with text content, `isError: true` | `{"result":"Error: <text>","isError":true}` |
+/// | JSON-RPC `error` object (parse, access, unknown tool, …) | `{"result":"Error: <message>","isError":true}` |
 ///
 /// A frame that does not decode as the envelope, or lacks a string `tool`,
 /// throws ``MCPStdinDialectError/malformedFrame(_:)``; the host reports it on
@@ -101,6 +101,7 @@ public struct MCPPluginDialect: MCPStdinDialect {
         }
 
         let text: String
+        let isError: Bool
         if let errorValue = envelope["error"] {
             guard let errorObject = errorValue.value as? [String: Any],
                   let message = errorObject["message"] as? String
@@ -108,6 +109,7 @@ public struct MCPPluginDialect: MCPStdinDialect {
                 throw MCPStdinDialectError.unrepresentableResponse("error object without a message")
             }
             text = "Error: \(message)"
+            isError = true
         } else if let resultValue = envelope["result"] {
             guard let resultBytes = try? QuickJSON.encode(resultValue),
                   let toolResult = try? QuickJSON.decode(MCPToolResult.self, from: resultBytes)
@@ -115,12 +117,13 @@ public struct MCPPluginDialect: MCPStdinDialect {
                 throw MCPStdinDialectError.unrepresentableResponse("result is not a tool-result payload")
             }
             text = Self.harnessText(from: toolResult)
+            isError = toolResult.isError
         } else {
             throw MCPStdinDialectError.unrepresentableResponse("neither \"result\" nor \"error\" present")
         }
 
         do {
-            return try QuickJSON.encode(["result": AnyCodable(text)])
+            return try QuickJSON.encode(["result": AnyCodable(text), "isError": AnyCodable(isError)])
         } catch {
             throw MCPStdinDialectError.unrepresentableResponse("failed to encode result: \(error)")
         }

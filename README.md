@@ -241,7 +241,7 @@ struct MyApp {
 ### One-shot stdin tools
 
 `interface: .oneShot` compiles a binary that a harness drives over stdin —
-the plugin envelope (`{"tool","args"}` → `{"result"}`), JSON-RPC, and its own
+the plugin envelope (`{"tool","args"}` → `{"result","isError"}`), JSON-RPC, and its own
 introspection (`--mcp-list`, `--mcp-manifest arc`) — with no hand-written
 envelope, dispatch table, or manifest code. See the
 [One-Shot Stdin Tools](Sources/MCP/Documentation.docc/StdinTools.md) guide.
@@ -256,7 +256,7 @@ struct MyTool {
 
 ```bash
 $ echo '{"tool":"greet","args":{"name":"Ada"}}' | my-tool
-{"result":"Hello, Ada!"}
+{"result":"Hello, Ada!","isError":false}
 
 $ my-tool --mcp-manifest arc        # the binary describes itself
 ```

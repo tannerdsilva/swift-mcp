@@ -97,8 +97,9 @@ struct StdinHostTests {
         try testWrite(pair.inputWrite.fileDescriptor, Array(#"{"tool":"greet","args":{"name":"Std"}}"#.utf8) + [0x0A])
 
         // the response arrives while the input write end stays OPEN.
-        let response = hostReadUntil(fd: pair.outputRead.fileDescriptor, timeout: 5) { $0.contains("result") }
-        #expect(response.contains(#"{"result":"Hello, Std!"}"#))
+        let response = hostReadUntil(fd: pair.outputRead.fileDescriptor, timeout: 5) { $0.contains("isError") }
+        #expect(response.contains(#""result":"Hello, Std!""#))
+        #expect(response.contains(#""isError":false"#))
 
         // and run() completes with stdin still open — a stdin-holding harness
         // cannot hang.
