@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.1.2
+
+**Fixed — the subprocess transport's shutdown ladder follows the child's
+placement.** Requires SwiftSlash 6.
+
+### Fixed
+
+- `SubprocessClientTransport` signalled the child with a bare `kill(-pid)`,
+  which is only correct for a child that leads its own process group. In the
+  shape every real deployment has — a harness spawns the MCP host, so the host
+  is itself a launch child — the server resolves `.inherited`, joins the
+  enclosing launch's group and leads none of its own. `-pid` then named a group
+  that does not exist, so the kernel answered `ESRCH` and **both** the SIGTERM
+  and SIGKILL rungs silently did nothing: a server that ignores stdin EOF
+  outlived `stop()` and was never reaped. The ladder now delegates to the
+  library's placement-aware `signal(_:to:.processGroup)`, which targets `-pid`
+  for an `.own` child and `pid` for any other placement.
+- pinned by `SubprocessLadderPlacementTests`, which drives the transport from
+  *inside* a launch (`MCPNestedLadderFixture`, a launch child that starts the
+  transport itself) so the server is genuinely `.inherited`. It asserts the
+  placement (`pgid(server) == pgid(fixture) != pid(server)`) and the outcome
+  (the server is gone **and** reaped after `stop()`).
+
+### Changed
+
+- the SwiftSlash requirement is `"6.0.0"..<"7.0.0"`. Process-group placement is
+  part of v6's spawn contract, and the ladder above depends on it.
+
 ## 2.1.1
 
 **Fixed — the client accepts a `tools/call` result that omits `isError`.**

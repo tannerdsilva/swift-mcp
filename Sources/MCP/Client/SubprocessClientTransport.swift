@@ -577,25 +577,45 @@ public final class SubprocessClientTransport: ClientTransport, @unchecked Sendab
         }
     }
 
-    /// Sends a signal to the child's whole process group (`kill(-pid, ...)`).
+    /// Sends a signal to the child, scoped to the placement the child was given.
+    ///
+    /// The target must follow the child's ``ChildProcess/ProcessGroup``. A
+    /// server this transport started from a top-level process leads its own
+    /// group, so a group signal cascades through its whole tree; the same
+    /// transport inside a launch — the shape every real deployment has, because
+    /// a harness owns the MCP host — starts a server that is `.inherited`, which
+    /// leads no group of its own. A negated pid then names a group that does not
+    /// exist, so `kill` answers `ESRCH` and the rung silently never lands.
+    /// Delegating to the library's placement-aware `signal(_:to:)` keeps that
+    /// rule in the one place that knows the placement.
     ///
     /// Wait briefly for the child to reach `.running` first: a `stop()` that
     /// lands during `start()`'s launch window would otherwise find
-    /// `.launching` and silently skip the rung (the launch's pgroup is not
-    /// signaled). Bounded — a child that never launches surfaces through
-    /// `waitForExit`'s deadline instead of blocking here.
+    /// `.launching` and silently skip the rung. Bounded — a child that never
+    /// launches surfaces through `waitForExit`'s deadline instead of blocking
+    /// here.
     private func signalProcessGroup(_ child: ChildProcess, _ signal: Int32) async {
         let deadline = ContinuousClock.now + .seconds(1)
         while ContinuousClock.now < deadline {
-            let state = await child.state
-            if case .running(let pid) = state {
-                _ = kill(-pid, signal)
+            do {
+                try await child.signal(signal, to: .processGroup)
                 return
+            } catch {
+                switch error {
+                case .invalidState:
+                    // not running: either still launching (retry) or already
+                    // reaped (nothing left to signal).
+                    let state = await child.state
+                    if case .reaped = state {
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(20))
+                case .systemSignalError:
+                    // the kernel refused it — most often ESRCH because the child
+                    // went away between the state read and the call.
+                    return
+                }
             }
-            if case .reaped = state {
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(20))
         }
     }
 

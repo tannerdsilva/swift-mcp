@@ -50,12 +50,15 @@ let package = Package(
             url: "https://github.com/tannerdsilva/QuickJSON.git",
             from: "2.0.3"
         ),
-        // SwiftSlash v5 — bring-your-own data channels: bind a caller-owned
-        // NIO pipe channel onto a spawned child's stdio while SwiftSlash
-        // handles spawn, reaping, and cancellation only.
+        // SwiftSlash v6 — process-group placement is part of the spawn
+        // contract: bind a caller-owned NIO pipe channel onto a spawned
+        // child's stdio (`.byo(fd:)`) while SwiftSlash handles spawn, reaping,
+        // and cancellation. the placement resolution v6 adds is what keeps a
+        // nested server inside the launch tree it was started from, so an
+        // enclosing owner's teardown reaches it instead of leaving it behind.
         .package(
             url: "https://github.com/tannerdsilva/SwiftSlash.git",
-            from: "5.0.0"
+            "6.0.0"..<"7.0.0"
         ),
         // ArgumentParser — used only by the two-file pack fixture, which
         // compile-checks the selective-import layout a pack with its own CLI
@@ -118,6 +121,21 @@ let package = Package(
         // article points at. not part of the library.
         .executableTarget(
             name: "MCPToolPack",
+            dependencies: ["MCP"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+
+        // --- Test fixture: nested shutdown-ladder driver ---
+        //
+        // a launch child that drives the subprocess client transport itself, so
+        // the server that transport starts is genuinely `.inherited` (the
+        // placement a real deployment gives it). the suite spawns this through
+        // SwiftSlash and reads the placement + outcome it reports to a file.
+        // not part of the library.
+        .executableTarget(
+            name: "MCPNestedLadderFixture",
             dependencies: ["MCP"],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
